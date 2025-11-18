@@ -4,76 +4,35 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const PORT = process.env.PORT || 3000;
 
-let users = {};   // socketId -> {name, socketId}
-let admins = {};  // socketId -> {name, socketId}
+// Track all connected users
+let users = {}; // socketId -> { socketId }
 
-// ===== ROUTES =====
-app.get("/", (req, res) => res.send("Walkie Server Running"));
+app.get("/", (req,res)=>res.send("Walkie Server Running"));
 
-// ===== SOCKET.IO =====
 io.on("connection", (socket) => {
   console.log("New connection:", socket.id);
+  users[socket.id] = { socketId: socket.id };
 
-  // ===== USER REGISTRATION =====
-  socket.on("register-user", ({ name }) => {
-    users[socket.id] = { name, socketId: socket.id };
-    console.log("User registered:", name);
+  // Notify all admins of new user
+  io.emit("user-list", Object.keys(users));
 
-    // Assign first admin (if any) to this user
-    const adminIds = Object.keys(admins);
-    let assignedAdmin = adminIds.length ? adminIds[0] : null;
-    if(assignedAdmin){
-      socket.emit("assign-admin", assignedAdmin);
-    }
-
-    // Notify all admins of new user
-    adminIds.forEach(aid => {
-      io.to(aid).emit("user-joined", { id: socket.id, name });
-    });
-  });
-
-  // ===== ADMIN REGISTRATION =====
-  socket.on("register-admin", () => {
-    admins[socket.id] = { name: "Admin", socketId: socket.id };
-    console.log("Admin connected:", socket.id);
-
-    // Send current users to this admin
-    const userList = Object.entries(users).map(([id, u]) => ({ id, name: u.name }));
-    socket.emit("current-users", userList);
-  });
-
-  // ===== SIGNALING =====
+  // SIGNALING
   socket.on("signal", (data) => {
-    const targetId = data.targetId;
-    if(targetId) {
+    const { targetId } = data;
+    if(targetId && users[targetId]){
       io.to(targetId).emit("signal", { id: socket.id, data });
     }
   });
 
-  // ===== DISCONNECT =====
   socket.on("disconnect", () => {
-    if(users[socket.id]){
-      const name = users[socket.id].name;
-      console.log("User disconnected:", name);
-      delete users[socket.id];
-      for(let aid of Object.keys(admins)){
-        io.to(aid).emit("user-left", socket.id);
-      }
-    }
-    if(admins[socket.id]){
-      console.log("Admin disconnected:", socket.id);
-      delete admins[socket.id];
-      for(let uid of Object.keys(users)){
-        io.to(uid).emit("admin-left", socket.id);
-      }
-    }
+    delete users[socket.id];
+    io.emit("user-list", Object.keys(users));
+    console.log("Disconnected:", socket.id);
   });
 });
 
-server.listen(PORT, () => console.log(`Walkie server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
