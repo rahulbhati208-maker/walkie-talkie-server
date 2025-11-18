@@ -10,14 +10,13 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// Keep track of connected users/admins
-let users = {};    // socketId -> {name, socketId}
-let admins = {};   // socketId -> {name, socketId}
+let users = {};   // socketId -> {name, socketId}
+let admins = {};  // socketId -> {name, socketId}
 
-// ====== ROUTES ======
+// ===== ROUTES =====
 app.get("/", (req, res) => res.send("Walkie Server Running"));
 
-// ====== SOCKET.IO ======
+// ===== SOCKET.IO =====
 io.on("connection", (socket) => {
   console.log("New connection:", socket.id);
 
@@ -34,11 +33,9 @@ io.on("connection", (socket) => {
     }
 
     // Notify all admins of new user
-    for(let aid of adminIds){
+    adminIds.forEach(aid => {
       io.to(aid).emit("user-joined", { id: socket.id, name });
-    }
-
-    // Send current users to this admin if admin connects later
+    });
   });
 
   // ===== ADMIN REGISTRATION =====
@@ -47,7 +44,7 @@ io.on("connection", (socket) => {
     console.log("Admin connected:", socket.id);
 
     // Send current users to this admin
-    const userList = Object.values(users);
+    const userList = Object.entries(users).map(([id, u]) => ({ id, name: u.name }));
     socket.emit("current-users", userList);
   });
 
@@ -59,13 +56,12 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ===== USER DISCONNECT =====
+  // ===== DISCONNECT =====
   socket.on("disconnect", () => {
     if(users[socket.id]){
       const name = users[socket.id].name;
       console.log("User disconnected:", name);
       delete users[socket.id];
-      // Notify all admins
       for(let aid of Object.keys(admins)){
         io.to(aid).emit("user-left", socket.id);
       }
@@ -73,7 +69,6 @@ io.on("connection", (socket) => {
     if(admins[socket.id]){
       console.log("Admin disconnected:", socket.id);
       delete admins[socket.id];
-      // Notify all users
       for(let uid of Object.keys(users)){
         io.to(uid).emit("admin-left", socket.id);
       }
