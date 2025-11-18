@@ -1,3 +1,4 @@
+// server.js
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -6,79 +7,78 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-const PORT = process.env.PORT || 3000;
+// ====== DATA STRUCTURES ======
+let adminPasswords = {}; // password -> admin socket id
+let userToAdmin = {};    // user socket id -> admin socket id
+let adminUsers = {};     // admin socket id -> [user socket ids]
 
-// Stores socketId -> { role, adminId (if user) }
-let clients = {};
-// Stores password -> admin socketId
-let adminPasswords = {};
-
+// ====== SOCKET CONNECTION ======
 io.on("connection", socket => {
   console.log("Connected:", socket.id);
 
-  // Register role
+  // ===== REGISTER ROLE =====
   socket.on("register", role => {
-    if (role === "admin") {
-      // Generate a 4-digit password
+    if(role==="admin"){
+      // Generate 4-digit password
       const password = Math.floor(1000 + Math.random() * 9000).toString();
       adminPasswords[password] = socket.id;
-      clients[socket.id] = { role: "admin", password, users: {} };
-      socket.emit("your-password", password);
-      console.log(`Admin ${socket.id} password: ${password}`);
-    }
-    if (role === "user") {
-      clients[socket.id] = { role: "user", adminId: null };
+      adminUsers[socket.id] = [];
+
+      // Emit password to admin
+      process.nextTick(() => {
+        socket.emit("your-password", password);
+      });
+
+      console.log(`Admin connected: ${socket.id}, password: ${password}`);
     }
   });
 
-  // User joins using admin password
+  // ===== USER JOINS ADMIN =====
   socket.on("join-admin", password => {
     const adminId = adminPasswords[password];
-    if (!adminId) {
+    if(!adminId){
       socket.emit("invalid-password");
       return;
     }
 
-    clients[socket.id].adminId = adminId;
-    // Add this user to admin's users
-    clients[adminId].users[socket.id] = true;
+    userToAdmin[socket.id] = adminId;
+    adminUsers[adminId].push(socket.id);
 
-    // Notify user and admin
-    socket.emit("connected-to-admin", adminId);
-    io.to(adminId).emit("user-list", Object.keys(clients[adminId].users));
-    console.log(`User ${socket.id} connected to admin ${adminId}`);
+    socket.emit("connected-to-admin");
+    io.to(adminId).emit("user-list", adminUsers[adminId]);
+    console.log(`User ${socket.id} joined admin ${adminId}`);
   });
 
-  // Signaling relay
-  socket.on("signal", ({ targetId, data }) => {
-    if (targetId) io.to(targetId).emit("signal", { id: socket.id, data });
+  // ===== SIGNALING =====
+  socket.on("signal", ({targetId, data}) => {
+    io.to(targetId).emit("signal", {id: socket.id, data});
   });
 
-  // Disconnect handling
+  // ===== DISCONNECT =====
   socket.on("disconnect", () => {
-    const client = clients[socket.id];
-    if (!client) return;
-
-    if (client.role === "user" && client.adminId) {
-      const adminId = client.adminId;
-      if (clients[adminId]) {
-        delete clients[adminId].users[socket.id];
-        io.to(adminId).emit("user-list", Object.keys(clients[adminId].users));
-      }
-    }
-
-    if (client.role === "admin") {
-      // Remove password mapping
-      delete adminPasswords[client.password];
-      // Notify connected users
-      Object.keys(client.users).forEach(uid => {
-        io.to(uid).emit("admin-disconnected");
-      });
-    }
-
-    delete clients[socket.id];
     console.log("Disconnected:", socket.id);
+
+    // Remove user from admin
+    if(userToAdmin[socket.id]){
+      const adminId = userToAdmin[socket.id];
+      adminUsers[adminId] = adminUsers[adminId].filter(u => u !== socket.id);
+      io.to(adminId).emit("user-list", adminUsers[adminId]);
+      delete userToAdmin[socket.id];
+    }
+
+    // Remove admin and notify users
+    Object.keys(adminPasswords).forEach(p => {
+      if(adminPasswords[p] === socket.id){
+        adminUsers[socket.id]?.forEach(u => io.to(u).emit("admin-disconnected"));
+        delete adminUsers[socket.id];
+        delete adminPasswords[p];
+      }
+    });
   });
 });
 
-server.listen(PORT, () => console.log("Server running on port", PORT));
+// ====== START SERVER ======
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
