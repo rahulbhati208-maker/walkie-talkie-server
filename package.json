@@ -1,12 +1,13 @@
 {
   "name": "walkie-talkie-server",
   "version": "1.0.0",
+  "description": "Push-to-Talk walkie-talkie app",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "socket.io": "^4.5.4"
+    "socket.io": "^4.7.1"
   }
 }
