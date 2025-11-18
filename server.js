@@ -1,64 +1,84 @@
 const express = require("express");
-const app = express();
 const http = require("http");
-const server = http.createServer(app);
 const { Server } = require("socket.io");
 
+const app = express();
+const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET","POST"] }
+  cors: { origin: "*" }
 });
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static("public"));
+// Keep track of connected users/admins
+let users = {};    // socketId -> {name, socketId}
+let admins = {};   // socketId -> {name, socketId}
 
-// Store connected users: socketId => { name, role }
-const users = {}; // role = "user" | "admin"
+// ====== ROUTES ======
+app.get("/", (req, res) => res.send("Walkie Server Running"));
 
-// ===== Socket.IO =====
+// ====== SOCKET.IO ======
 io.on("connection", (socket) => {
   console.log("New connection:", socket.id);
 
-  // Register a user with name
+  // ===== USER REGISTRATION =====
   socket.on("register-user", ({ name }) => {
-    users[socket.id] = { name, role: "user" };
-    console.log(`User registered: ${name} (${socket.id})`);
+    users[socket.id] = { name, socketId: socket.id };
+    console.log("User registered:", name);
+
+    // Assign first admin (if any) to this user
+    const adminIds = Object.keys(admins);
+    let assignedAdmin = adminIds.length ? adminIds[0] : null;
+    if(assignedAdmin){
+      socket.emit("assign-admin", assignedAdmin);
+    }
 
     // Notify all admins of new user
-    socket.broadcast.emit("user-joined", { id: socket.id, name });
+    for(let aid of adminIds){
+      io.to(aid).emit("user-joined", { id: socket.id, name });
+    }
+
+    // Send current users to this admin if admin connects later
   });
 
-  // Register admin
+  // ===== ADMIN REGISTRATION =====
   socket.on("register-admin", () => {
-    users[socket.id] = { name: "Admin", role: "admin" };
-    console.log(`Admin connected: ${socket.id}`);
+    admins[socket.id] = { name: "Admin", socketId: socket.id };
+    console.log("Admin connected:", socket.id);
 
     // Send current users to this admin
-    const currentUsers = Object.entries(users)
-      .filter(([id,u]) => u.role === "user")
-      .map(([id,u]) => ({ id, name: u.name }));
-
-    socket.emit("current-users", currentUsers);
+    const userList = Object.values(users);
+    socket.emit("current-users", userList);
   });
 
-  // Forward WebRTC signaling messages
+  // ===== SIGNALING =====
   socket.on("signal", (data) => {
-    const target = io.sockets.sockets.get(data.targetId);
-    if(target) target.emit("signal", { id: socket.id, data });
+    const targetId = data.targetId;
+    if(targetId) {
+      io.to(targetId).emit("signal", { id: socket.id, data });
+    }
   });
 
-  // Handle disconnect
+  // ===== USER DISCONNECT =====
   socket.on("disconnect", () => {
     if(users[socket.id]){
-      const user = users[socket.id];
-      console.log(`Disconnected: ${user.name} (${socket.id})`);
-      socket.broadcast.emit("user-left", socket.id);
+      const name = users[socket.id].name;
+      console.log("User disconnected:", name);
       delete users[socket.id];
+      // Notify all admins
+      for(let aid of Object.keys(admins)){
+        io.to(aid).emit("user-left", socket.id);
+      }
+    }
+    if(admins[socket.id]){
+      console.log("Admin disconnected:", socket.id);
+      delete admins[socket.id];
+      // Notify all users
+      for(let uid of Object.keys(users)){
+        io.to(uid).emit("admin-left", socket.id);
+      }
     }
   });
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Walkie server running on port ${PORT}`));
