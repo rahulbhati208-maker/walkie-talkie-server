@@ -4,6 +4,7 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
     cors: { origin: "*" }
 });
@@ -32,6 +33,9 @@ io.on("connection", (socket) => {
     });
 });
 
-server.listen(3000, () => {
-    console.log("WebSocket server running on port 3000");
+// IMPORTANT FOR RENDER
+const PORT = process.env.PORT || 1000;
+
+server.listen(PORT, () => {
+    console.log("WebSocket server running on port " + PORT);
 });
