@@ -7,6 +7,7 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
+
 const io = new Server(server, {
     cors: {
         origin: "*",
@@ -14,150 +15,119 @@ const io = new Server(server, {
     }
 });
 
-// ---------------------------
-// MATCHMAKING QUEUE
-// ---------------------------
-let waitingPlayer = null;
+// AUTO MATCH QUEUE
+let queue = null;
 
-// ---------------------------
-// ROOM STORAGE
-// ---------------------------
-const activeRooms = new Map(); // roomCode → [player1, player2]
+// ROOMS for play with friend
+let rooms = {};
 
-function generateRoomCode() {
-    return Math.floor(1000 + Math.random() * 9000).toString();
-}
-
-// ---------------------------
-// SOCKET CONNECTION
-// ---------------------------
 io.on("connection", (socket) => {
-    console.log(`User connected: ${socket.id}`);
 
-    socket.emit("server_status", "online");
+    console.log("✔ User connected:", socket.id);
 
-    // ---------------------------
-    // AUTO-MATCH MAKING
-    // ---------------------------
-    socket.on("find_match", () => {
-        if (waitingPlayer == null) {
-            waitingPlayer = socket.id;
-            socket.emit("match_status", "searching");
+    // ===========================
+    // AUTO MATCH
+    // ===========================
+    socket.on("findMatch", () => {
+        if (!queue) {
+            queue = socket;
+            socket.emit("matchWaiting");
         } else {
-            const p1 = waitingPlayer;
-            const p2 = socket.id;
-            waitingPlayer = null;
+            // Pair both users
+            let p1 = queue;
+            let p2 = socket;
 
-            const room = `match_${p1}_${p2}`;
+            p1.emit("matchFound", { opponent: p2.id, youAre: "X" });
+            p2.emit("matchFound", { opponent: p1.id, youAre: "O" });
 
-            socket.join(room);
-            io.to(p1).socketsJoin(room);
+            p1.opponent = p2.id;
+            p2.opponent = p1.id;
 
-            io.to(room).emit("match_found", {
-                room: room,
-                players: [p1, p2]
-            });
+            queue = null;
         }
     });
 
-    // ---------------------------
-    // PLAY WITH FRIEND – CREATE ROOM
-    // ---------------------------
-    socket.on("create_room", () => {
-        const code = generateRoomCode();
-        socket.join(code);
-        activeRooms.set(code, [socket.id]);
-        socket.emit("room_created", code);
+    // ===========================
+    // PLAY WITH COMPUTER
+    // ===========================
+    socket.on("startComputerGame", (difficulty) => {
+        socket.emit("computerGameStarted", difficulty);
     });
 
-    // ---------------------------
-    // PLAY WITH FRIEND – JOIN ROOM
-    // ---------------------------
-    socket.on("join_room", (code) => {
-        if (!activeRooms.has(code)) {
-            socket.emit("room_error", "Room does not exist");
+    // ===========================
+    // PLAY WITH FRIEND
+    // ===========================
+    socket.on("createRoom", () => {
+        let code = Math.floor(1000 + Math.random() * 9000).toString();
+
+        rooms[code] = {
+            host: socket.id,
+            guest: null
+        };
+
+        socket.join(code);
+        socket.emit("roomCreated", code);
+    });
+
+    socket.on("joinRoom", (code) => {
+        if (!rooms[code]) {
+            socket.emit("roomError", "Room does not exist!");
             return;
         }
 
-        const players = activeRooms.get(code);
-
-        if (players.length >= 2) {
-            socket.emit("room_error", "Room full");
+        if (rooms[code].guest) {
+            socket.emit("roomError", "Room already full!");
             return;
         }
 
-        players.push(socket.id);
+        rooms[code].guest = socket.id;
+
         socket.join(code);
 
-        io.to(code).emit("room_ready", {
-            room: code,
-            players: players
-        });
+        // Notify both users
+        io.to(rooms[code].host).emit("friendJoined", { opponent: socket.id, youAre: "X" });
+        io.to(socket.id).emit("friendJoined", { opponent: rooms[code].host, youAre: "O" });
     });
 
-    // ---------------------------
-    // GAME RELAY EVENTS (BOARD)
-    // ---------------------------
-    socket.on("move", (data) => {
-        socket.to(data.room).emit("move", data);
+    // ===========================
+    // GAME EVENTS
+    // ===========================
+    socket.on("playerMove", (data) => {
+        io.to(data.opponent).emit("opponentMove", data);
     });
 
-    // ---------------------------
-    // TIMER / TURN SYNC
-    // ---------------------------
-    socket.on("turn", (data) => {
-        socket.to(data.room).emit("turn", data);
+    socket.on("sendEmoji", (data) => {
+        io.to(data.opponent).emit("receiveEmoji", data.emoji);
     });
 
-    // ---------------------------
-    // EMOJI SEND
-    // ---------------------------
-    socket.on("emoji", (data) => {
-        socket.to(data.room).emit("emoji", data);
+    socket.on("muteStatus", (data) => {
+        io.to(data.opponent).emit("opponentMute", data.muted);
     });
 
-    // ---------------------------
-    // PLAYER LEFT
-    // ---------------------------
-    socket.on("leave_room", (room) => {
-        socket.leave(room);
-        socket.to(room).emit("opponent_left");
+    // ===========================
+    // VOICE CHAT RELAY
+    // ===========================
+    socket.on("voiceStream", (data) => {
+        io.to(data.opponent).emit("voiceStream", data.chunk);
     });
 
-    // ---------------------------
-    // WEBRTC VOICE RELAY
-    // ---------------------------
-    socket.on("webrtc_offer", (data) => {
-        socket.to(data.room).emit("webrtc_offer", data);
-    });
-
-    socket.on("webrtc_answer", (data) => {
-        socket.to(data.room).emit("webrtc_answer", data);
-    });
-
-    socket.on("webrtc_ice", (data) => {
-        socket.to(data.room).emit("webrtc_ice", data);
-    });
-
-    // ---------------------------
-    // DISCONNECT HANDLING
-    // ---------------------------
     socket.on("disconnect", () => {
-        console.log(`User disconnected: ${socket.id}`);
+        console.log("✖ Disconnected:", socket.id);
 
-        if (waitingPlayer === socket.id) {
-            waitingPlayer = null;
-        }
+        // clear queue
+        if (queue && queue.id === socket.id) queue = null;
 
-        activeRooms.forEach((players, code) => {
-            if (players.includes(socket.id)) {
-                io.to(code).emit("opponent_left");
-                activeRooms.delete(code);
+        // clean rooms
+        Object.keys(rooms).forEach(code => {
+            if (rooms[code].host === socket.id || rooms[code].guest === socket.id) {
+                io.to(code).emit("opponentLeft");
+                delete rooms[code];
             }
         });
     });
+
 });
 
 server.listen(3000, () => {
-    console.log("Server running on port 3000");
+    console.log("🚀 Server running on port 3000");
 });
