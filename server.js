@@ -7,9 +7,6 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Serve static files from the public directory
-app.use(express.static(path.join(__dirname, 'public')));
-
 // Store connected clients
 const clients = new Map();
 const users = new Map();
@@ -19,13 +16,26 @@ const admin = {
     online: false
 };
 
+// CORS middleware
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    next();
+});
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
 // WebSocket connection handling
 wss.on('connection', (ws, req) => {
     console.log('New client connected');
+    console.log('Client IP:', req.socket.remoteAddress);
     
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            console.log('Received message:', data.type, 'from:', data.id);
             handleMessage(ws, data);
         } catch (error) {
             console.error('Error parsing message:', error);
@@ -37,6 +47,7 @@ wss.on('connection', (ws, req) => {
     });
     
     ws.on('close', () => {
+        console.log('Client disconnected');
         handleDisconnection(ws);
     });
     
@@ -84,6 +95,8 @@ function handleIdentification(ws, data) {
         admin.ws = ws;
         admin.online = true;
         
+        console.log(`Admin ${clientId} connected`);
+        
         // Notify all users that admin is online
         broadcastToUsers({
             type: 'adminOnline',
@@ -93,8 +106,6 @@ function handleIdentification(ws, data) {
         // Send current user list to admin
         sendUserListToAdmin();
         
-        console.log(`Admin ${clientId} connected`);
-        
     } else if (role === 'user') {
         users.set(clientId, { 
             id: clientId, 
@@ -102,6 +113,8 @@ function handleIdentification(ws, data) {
             online: true,
             connectedAt: new Date()
         });
+        
+        console.log(`User ${clientId} connected`);
         
         // Notify admin about new user
         if (admin.online && admin.ws) {
@@ -113,8 +126,6 @@ function handleIdentification(ws, data) {
             // Update user list for admin
             sendUserListToAdmin();
         }
-        
-        console.log(`User ${clientId} connected`);
     }
     
     // Send confirmation to client
@@ -129,6 +140,8 @@ function handleChatMessage(ws, data) {
     const client = clients.get(ws);
     if (!client) return;
     
+    console.log(`Chat message from ${client.role} ${client.id}:`, data.text);
+    
     if (client.role === 'user') {
         // Forward user message to admin
         if (admin.online && admin.ws) {
@@ -140,7 +153,7 @@ function handleChatMessage(ws, data) {
             }));
         }
     } else if (client.role === 'admin') {
-        // Forward admin message to specific user or all users
+        // Forward admin message to specific user
         if (data.targetId) {
             const targetUser = users.get(data.targetId);
             if (targetUser && targetUser.online) {
@@ -151,19 +164,13 @@ function handleChatMessage(ws, data) {
                     senderRole: 'admin'
                 }));
             }
-        } else {
-            // Broadcast to all users
-            broadcastToUsers({
-                type: 'chatMessage',
-                text: data.text,
-                senderId: admin.id,
-                senderRole: 'admin'
-            });
         }
     }
 }
 
 function forwardWebRTCMessage(targetId, data) {
+    console.log(`Forwarding WebRTC ${data.type} to ${targetId}`);
+    
     let targetWs = null;
     
     if (targetId === admin.id && admin.online) {
@@ -175,15 +182,20 @@ function forwardWebRTCMessage(targetId, data) {
         }
     }
     
-    if (targetWs) {
-        // Modify the message to include the sender's ID
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        // Add from field to identify sender
+        const senderWs = findWebSocketByClientId(data.from);
+        const senderClient = clients.get(senderWs);
+        
         const forwardedMessage = {
             ...data,
-            from: getClientIdByWebSocket(data.fromWs || findWebSocketByClientId(data.from))
+            from: data.from
         };
-        delete forwardedMessage.fromWs;
         
         targetWs.send(JSON.stringify(forwardedMessage));
+        console.log(`WebRTC message forwarded to ${targetId}`);
+    } else {
+        console.log(`Target ${targetId} not found or not connected`);
     }
 }
 
@@ -191,6 +203,8 @@ function handleDisconnection(ws) {
     const client = clients.get(ws);
     
     if (client) {
+        console.log(`${client.role} ${client.id} disconnected`);
+        
         if (client.role === 'admin') {
             // Admin disconnected
             admin.online = false;
@@ -201,8 +215,6 @@ function handleDisconnection(ws) {
             broadcastToUsers({
                 type: 'adminOffline'
             });
-            
-            console.log('Admin disconnected');
             
         } else if (client.role === 'user') {
             // User disconnected
@@ -218,8 +230,6 @@ function handleDisconnection(ws) {
                 // Update user list for admin
                 sendUserListToAdmin();
             }
-            
-            console.log(`User ${client.id} disconnected`);
         }
         
         clients.delete(ws);
@@ -227,11 +237,14 @@ function handleDisconnection(ws) {
 }
 
 function broadcastToUsers(message) {
+    let count = 0;
     users.forEach((user) => {
         if (user.online && user.ws.readyState === WebSocket.OPEN) {
             user.ws.send(JSON.stringify(message));
+            count++;
         }
     });
+    console.log(`Broadcasted to ${count} users`);
 }
 
 function sendUserListToAdmin() {
@@ -246,6 +259,8 @@ function sendUserListToAdmin() {
             type: 'userList',
             users: userList
         }));
+        
+        console.log(`Sent user list to admin: ${userList.length} users`);
     }
 }
 
@@ -279,11 +294,26 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// API endpoint to get server status
+app.get('/api/status', (req, res) => {
+    res.json({
+        server: 'walkie-talkie-server',
+        version: '1.0.0',
+        status: 'running',
+        connectedClients: clients.size,
+        connectedUsers: Array.from(users.values()).filter(user => user.online).length,
+        adminOnline: admin.online,
+        uptime: process.uptime()
+    });
+});
+
 // Start server
 const PORT = process.env.PORT || 1000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket server ready for connections`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📡 WebSocket server ready for connections`);
+    console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+    console.log(`📊 Status API: http://localhost:${PORT}/api/status`);
 });
 
 // Graceful shutdown
@@ -299,6 +329,15 @@ process.on('SIGINT', () => {
         console.log('Server shut down');
         process.exit(0);
     });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 module.exports = { server, wss, clients, users, admin };
