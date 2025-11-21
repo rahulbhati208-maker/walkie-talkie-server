@@ -1,13 +1,10 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const PORT = process.env.PORT || 10000;
 
@@ -17,11 +14,16 @@ const users = {};       // socketId: {name, adminCode, socket}
 
 app.use(express.static("public"));
 
+// Helper to generate 4-digit code
+function generateCode() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
   socket.on("register-admin", () => {
-    const code = uuidv4().slice(0,6);
+    const code = generateCode();
     admins[code] = { socket, users:{} };
     socket.emit("admin-registered", code);
     console.log("Admin registered with code:", code);
