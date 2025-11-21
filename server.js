@@ -1,14 +1,6 @@
-/**
- * server.js
- * Walkie-talkie signaling + presence server using Socket.IO
- *
- * - WebRTC signaling: webrtc_offer, webrtc_answer, webrtc_ice (forwarded to target)
- * - Presence: register, request_clients, who_is_admin, rename
- * - Speaking/session lifecycle: start_talk, stop_talk -> aggregated chat_log entries
- * - Private mode: audio is P2P between admin and users (admin <-> user)
- *
- * Usage: node server.js
- */
+// server.js
+// Walkie-talkie signaling + presence server with WebRTC support and session stats aggregation
+// Node >= 18 recommended
 
 const express = require('express');
 const http = require('http');
@@ -26,14 +18,14 @@ const io = new Server(server, {
   maxHttpBufferSize: 5e7
 });
 
-// Serve frontend if present
+// Serve frontend if present (optional)
 const FRONT = path.join(__dirname, 'frontend');
 if (fs.existsSync(FRONT)) {
   app.use(express.static(FRONT));
   console.log('Serving frontend from', FRONT);
 }
 
-// Load persisted clients (names)
+// Persistent client metadata (names)
 let clients = {}; // clientId -> { clientId, name, role, socketId, lastSeen }
 try {
   if (fs.existsSync(DATA_FILE)) {
@@ -41,16 +33,12 @@ try {
     clients = JSON.parse(raw);
   }
 } catch (e) {
-  console.warn('clients.json load failed', e);
+  console.warn('Failed to load clients.json', e);
   clients = {};
 }
-
 function persistClients() {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(clients, null, 2));
-  } catch (e) {
-    console.warn('persist write failed', e);
-  }
+  try { fs.writeFileSync(DATA_FILE, JSON.stringify(clients, null, 2)); }
+  catch (e) { console.warn('persist error', e); }
 }
 
 function buildClientsList() {
@@ -62,78 +50,69 @@ function buildClientsList() {
     lastSeen: c.lastSeen || null
   }));
 }
+function broadcastClientsList() { io.emit('clients_list', buildClientsList()); }
 
-function broadcastClientsList() {
-  io.emit('clients_list', buildClientsList());
-}
-
-/* Active session tracking (used for aggregated chat_log)
-   key = `${from}::${to}` where to may be clientId or 'ALL' or 'UNKNOWN'
-   value = { from, to, startTs, bytes }
-*/
+// Active sessions tracking for aggregation
+// key: `${from}::${to}`
 const activeSessions = {};
 
 function sessionKey(from, to) {
   return `${from}::${to || 'UNKNOWN'}`;
 }
-
 function ensureSession(from, to) {
   const k = sessionKey(from, to);
   if (!activeSessions[k]) activeSessions[k] = { from, to, startTs: Date.now(), bytes: 0 };
   return activeSessions[k];
 }
-
+function addBytesToSession(from, to, bytes) {
+  const k = sessionKey(from, to);
+  if (!activeSessions[k]) activeSessions[k] = { from, to, startTs: Date.now(), bytes: 0 };
+  activeSessions[k].bytes = (activeSessions[k].bytes || 0) + (Number(bytes) || 0);
+  return activeSessions[k].bytes;
+}
 function endSessionAndEmitSummary(from, to) {
   const k = sessionKey(from, to);
   const s = activeSessions[k];
   if (!s) return;
-  const duration = Math.round((Date.now() - s.startTs) / 1000);
+  const duration = Math.round((Date.now() - s.startTs)/1000);
   const entry = { from: s.from, to: s.to, ts: Date.now(), duration, bytes: s.bytes || 0 };
-  // emit to all (admin UI displays on right/left panes)
   io.emit('chat_log', entry);
   delete activeSessions[k];
 }
 
-// Helper to compute byte length for Buffer / ArrayBuffer / Blob-like shapes
+// helper: byte length for raw binary payloads (legacy audio_chunk support)
 function bufferByteLength(buf) {
   if (!buf) return 0;
   if (Buffer.isBuffer(buf)) return buf.length;
   if (buf instanceof ArrayBuffer) return buf.byteLength;
   if (buf && buf.byteLength !== undefined) return buf.byteLength;
   if (buf && buf.data && Array.isArray(buf.data)) return buf.data.length;
-  if (buf.size !== undefined) return buf.size;
+  if (buf && buf.size !== undefined) return buf.size;
   return 0;
 }
 
-/* ------------------ Socket.IO handlers ------------------ */
 io.on('connection', (socket) => {
   console.log('[connect]', socket.id);
 
-  // Register the client
-  // payload: { clientId, role, name }
+  // REGISTER
   socket.on('register', (payload = {}) => {
     const { clientId, role = 'user', name } = payload;
-    if (!clientId) {
-      socket.emit('register_ack', { ok: false, error: 'clientId required' });
-      return;
-    }
+    if (!clientId) { socket.emit('register_ack', { ok:false, error:'clientId required' }); return; }
     clients[clientId] = clients[clientId] || { clientId };
     clients[clientId].socketId = socket.id;
     clients[clientId].role = role;
-    if (typeof name === 'string' && name.trim().length > 0) clients[clientId].name = name.trim();
+    if (typeof name === 'string' && name.trim().length) clients[clientId].name = name.trim();
     clients[clientId].lastSeen = Date.now();
     socket.data.clientId = clientId;
     socket.data.role = role;
     persistClients();
-    socket.emit('register_ack', { ok: true });
+    socket.emit('register_ack', { ok:true });
     broadcastClientsList();
     console.log(`[register] ${clientId} (${role}) ${clients[clientId].name || ''}`);
   });
 
-  // Request clients list
-  socket.on('request_clients', () => {
-    socket.emit('clients_list', buildClientsList());
-  });
+  // request_clients
+  socket.on('request_clients', () => socket.emit('clients_list', buildClientsList()));
 
   // who_is_admin (callback)
   socket.on('who_is_admin', (payload, cb) => {
@@ -154,13 +133,7 @@ io.on('connection', (socket) => {
     console.log(`[rename] ${clientId} => ${newName}`);
   });
 
-  /* ---------------- WebRTC signalling ----------------
-     The frontend should send:
-       webrtc_offer: { from, to, sdp }
-       webrtc_answer: { from, to, sdp }
-       webrtc_ice: { from, to, candidate }
-     Server simply forwards to the socketId of 'to' if online
-  ----------------------------------------------------*/
+  /* ---------------- WebRTC signaling forwarding ---------------- */
   socket.on('webrtc_offer', (payload) => {
     try {
       const { from, to, sdp } = payload || {};
@@ -169,7 +142,6 @@ io.on('connection', (socket) => {
       if (target && target.socketId) {
         io.to(target.socketId).emit('webrtc_offer', { from, sdp });
       } else {
-        // target offline, optionally notify sender
         socket.emit('webrtc_no_target', { to });
       }
     } catch (e) { console.warn('webrtc_offer error', e); }
@@ -180,9 +152,7 @@ io.on('connection', (socket) => {
       const { from, to, sdp } = payload || {};
       if (!from || !to) return;
       const target = clients[to];
-      if (target && target.socketId) {
-        io.to(target.socketId).emit('webrtc_answer', { from, sdp });
-      }
+      if (target && target.socketId) io.to(target.socketId).emit('webrtc_answer', { from, sdp });
     } catch (e) { console.warn('webrtc_answer error', e); }
   });
 
@@ -191,46 +161,44 @@ io.on('connection', (socket) => {
       const { from, to, candidate } = payload || {};
       if (!from || !to) return;
       const target = clients[to];
-      if (target && target.socketId) {
-        io.to(target.socketId).emit('webrtc_ice', { from, candidate });
-      }
+      if (target && target.socketId) io.to(target.socketId).emit('webrtc_ice', { from, candidate });
     } catch (e) { console.warn('webrtc_ice error', e); }
   });
 
-  /* ---------------- Session / speaking lifecycle ----------------
-     start_talk: { from, target }  // create session and broadcast speaking state
-     stop_talk:  { from, target }  // end session, emit summarized chat_log
-  --------------------------------------------------------------*/
+  /* ---------------- Session lifecycle ---------------- */
   socket.on('start_talk', ({ from, target }) => {
     if (!from) return;
-    // ensure session exists
     ensureSession(from, target || 'UNKNOWN');
-    // broadcast speaking -> clients can highlight UI (admin -> target or user -> admin)
     io.emit('speaking', { clientId: from, speaking: true, target: target || null });
   });
 
   socket.on('stop_talk', ({ from, target }) => {
     if (!from) return;
     io.emit('speaking', { clientId: from, speaking: false, target: target || null });
-    // finalize session summary and emit chat_log
     endSessionAndEmitSummary(from, target || 'UNKNOWN');
   });
 
-  /* For legacy/frontends that forward binary chunks via sockets (we still support it):
-     audio_chunk: { from, to, buffer }  // server will forward similarly as before and accumulate bytes
-     NOTE: With WebRTC you won't use audio_chunk for media, but you might use it for fallback.
+  /* Clients can send stats (from RTCPeerConnection.getStats) after/while session runs:
+     session_stats: { from, to, bytesSent, bytesReceived }  -> we aggregate bytes
+     This helps avoid '0B' in logs when media goes over WebRTC.
   */
+  socket.on('session_stats', ({ from, to, bytesSent, bytesReceived }) => {
+    try {
+      if (!from) return;
+      const bytes = Number(bytesSent || bytesReceived || 0);
+      if (bytes > 0) addBytesToSession(from, to || 'UNKNOWN', bytes);
+    } catch (e) { console.warn('session_stats err', e); }
+  });
+
+  /* legacy support: audio_chunk forwarding if someone still sends binary chunks */
   socket.on('audio_chunk', (payload) => {
     try {
       if (!payload) return;
       const { from, to } = payload;
-      const buffer = payload.buffer || payload; // sometimes raw binary
+      const buffer = payload.buffer || payload;
       const bytes = bufferByteLength(buffer);
-      // accumulate into session
-      const sess = ensureSession(from, to || 'UNKNOWN');
-      sess.bytes = (sess.bytes || 0) + bytes;
+      addBytesToSession(from, to || 'UNKNOWN', bytes);
 
-      // routing: if to==='ALL' and from is admin -> forward to all users
       if (to === 'ALL' && clients[from] && clients[from].role === 'admin') {
         Object.values(clients).forEach(c => {
           if (c.role === 'user' && c.socketId && c.clientId !== from) {
@@ -240,22 +208,18 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // direct forward if target online
       if (to && clients[to] && clients[to].socketId) {
         io.to(clients[to].socketId).emit('audio_chunk', { from, buffer });
       } else {
-        // fallback: if sender is user, forward to admin (if online)
         if (clients[from] && clients[from].role === 'user') {
-          const admin = Object.values(clients).find(c => c.role === 'admin' && !!c.socketId);
-          if (admin) io.to(admin.socketId).emit('audio_chunk', { from, buffer });
+          const adm = Object.values(clients).find(c => c.role === 'admin' && !!c.socketId);
+          if (adm) io.to(adm.socketId).emit('audio_chunk', { from, buffer });
         }
       }
-    } catch (e) {
-      console.warn('audio_chunk error', e);
-    }
+    } catch (e) { console.warn('audio_chunk error', e); }
   });
 
-  /* Cleanup on disconnect */
+  /* Disconnect cleanup */
   socket.on('disconnect', (reason) => {
     const cid = socket.data.clientId;
     console.log('[disconnect]', socket.id, cid || '', reason);
@@ -265,11 +229,10 @@ io.on('connection', (socket) => {
       persistClients();
       broadcastClientsList();
 
-      // finalize any active sessions involving this client
+      // finalize active sessions involving this client
       Object.keys(activeSessions).forEach(k => {
         if (k.startsWith(`${cid}::`) || k.endsWith(`::${cid}`)) {
           const s = activeSessions[k];
-          // notify UI that speaking stopped for this client
           io.emit('speaking', { clientId: s.from, speaking: false, target: s.to });
           endSessionAndEmitSummary(s.from, s.to);
         }
