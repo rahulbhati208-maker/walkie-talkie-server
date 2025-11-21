@@ -1,7 +1,6 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
@@ -11,15 +10,21 @@ const io = new Server(server, {
 
 app.use(express.static("public"));
 
+// Data structures
 const admins = {}; // adminCode => { socketId, users: {} }
 const users = {}; // socketId => { name, adminCode, speaking }
+
+// Simple 6-character code generator
+function generateCode() {
+  return Math.random().toString(36).substr(2,6).toUpperCase();
+}
 
 io.on("connection", (socket) => {
   console.log("New connection:", socket.id);
 
   // Admin registration
   socket.on("register-admin", () => {
-    const adminCode = uuidv4().slice(0, 6);
+    const adminCode = generateCode();
     admins[adminCode] = { socketId: socket.id, users: {} };
     socket.emit("admin-registered", adminCode);
     console.log("Admin registered:", adminCode);
@@ -41,7 +46,7 @@ io.on("connection", (socket) => {
     console.log(`${name} joined admin ${adminCode}`);
   });
 
-  // User talks
+  // User starts talking
   socket.on("user-start-talk", () => {
     const user = users[socket.id];
     if (!user) return;
@@ -50,6 +55,7 @@ io.on("connection", (socket) => {
     io.to(adminSocket).emit("user-speaking", { id: socket.id, name: user.name, speaking: true });
   });
 
+  // User stops talking
   socket.on("user-stop-talk", () => {
     const user = users[socket.id];
     if (!user) return;
@@ -69,7 +75,7 @@ io.on("connection", (socket) => {
     socket.emit("user-name-updated", newName);
   });
 
-  // Disconnect
+  // Disconnect handling
   socket.on("disconnect", () => {
     // Remove user
     if (users[socket.id]) {
