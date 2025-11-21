@@ -1,105 +1,94 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors:{ origin:"*" } });
 
-app.use(express.static("public"));
+const PORT = process.env.PORT || 10000;
 
-// Data structures
-const admins = {}; // adminCode => { socketId, users: {} }
-const users = {}; // socketId => { name, adminCode, speaking }
+let admins = {}; // adminCode: {socketId, users:{}}
+let users = {}; // socketId: {name, adminCode, talking=false, startTime=null}
 
-// Simple 6-character code generator
-function generateCode() {
-  return Math.random().toString(36).substr(2,6).toUpperCase();
-}
+// Generate unique code
+const generateCode = () => Math.random().toString(36).substring(2,8);
 
-io.on("connection", (socket) => {
-  console.log("New connection:", socket.id);
+io.on('connection', socket=>{
+  console.log("Connected:", socket.id);
 
-  // Admin registration
-  socket.on("register-admin", () => {
-    const adminCode = generateCode();
-    admins[adminCode] = { socketId: socket.id, users: {} };
-    socket.emit("admin-registered", adminCode);
-    console.log("Admin registered:", adminCode);
+  // Register admin
+  socket.on('register-admin', ()=>{
+    const code = generateCode();
+    admins[code] = {socketId: socket.id, users:{}};
+    socket.emit("admin-registered", code);
   });
 
-  // User registration with admin code
-  socket.on("register-user", ({ name, adminCode }) => {
-    if (!admins[adminCode]) {
-      socket.emit("invalid-admin-code");
-      return;
-    }
-    users[socket.id] = { name, adminCode, speaking: false };
+  // Register user
+  socket.on('register-user', ({name, adminCode})=>{
+    if(!admins[adminCode]) return socket.emit("admin-offline");
+    users[socket.id] = {name, adminCode, talking:false, startTime:null};
     admins[adminCode].users[socket.id] = users[socket.id];
-    // Notify admin
-    io.to(admins[adminCode].socketId).emit(
-      "user-joined",
-      { id: socket.id, name }
-    );
-    console.log(`${name} joined admin ${adminCode}`);
+    socket.join(adminCode);
+
+    socket.emit("admin-online");
+    io.to(admins[adminCode].socketId).emit("user-joined", {id:socket.id,name});
   });
 
-  // User starts talking
-  socket.on("user-start-talk", () => {
-    const user = users[socket.id];
-    if (!user) return;
-    user.speaking = true;
-    const adminSocket = admins[user.adminCode].socketId;
-    io.to(adminSocket).emit("user-speaking", { id: socket.id, name: user.name, speaking: true });
-  });
-
-  // User stops talking
-  socket.on("user-stop-talk", () => {
-    const user = users[socket.id];
-    if (!user) return;
-    user.speaking = false;
-    const adminSocket = admins[user.adminCode].socketId;
-    io.to(adminSocket).emit("user-speaking", { id: socket.id, name: user.name, speaking: false });
-  });
-
-  // User name change
-  socket.on("change-user-name", (newName) => {
-    const user = users[socket.id];
-    if (!user) return;
-    const oldName = user.name;
-    user.name = newName;
-    const adminSocket = admins[user.adminCode].socketId;
-    io.to(adminSocket).emit("user-name-changed", { id: socket.id, oldName, newName });
-    socket.emit("user-name-updated", newName);
-  });
-
-  // Disconnect handling
-  socket.on("disconnect", () => {
-    // Remove user
-    if (users[socket.id]) {
-      const { name, adminCode } = users[socket.id];
-      if (admins[adminCode]) {
-        delete admins[adminCode].users[socket.id];
-        io.to(admins[adminCode].socketId).emit("user-left", { id: socket.id, name });
-      }
-      delete users[socket.id];
-      console.log(`${name} disconnected`);
+  // User talk toggle
+  socket.on('user-talk-toggle', (active)=>{
+    const u = users[socket.id];
+    if(!u) return;
+    u.talking = active;
+    if(active) u.startTime = Date.now();
+    else {
+      const duration = Math.floor((Date.now()-u.startTime)/1000);
+      io.to(admins[u.adminCode].socketId).emit("log-event", {from:u.name, to:"Admin", duration});
+      u.startTime = null;
     }
-    // Remove admin
-    for (const code in admins) {
-      if (admins[code].socketId === socket.id) {
-        const allUsers = admins[code].users;
-        Object.keys(allUsers).forEach(uId => {
-          delete users[uId];
-        });
-        delete admins[code];
-        console.log(`Admin ${code} disconnected`);
-        break;
+    io.to(u.adminCode).emit("user-speaking",{id:socket.id,speaking:active});
+  });
+
+  // Admin talk toggle to user
+  socket.on('admin-talk-toggle', ({target, active})=>{
+    const u = users[target];
+    if(!u) return;
+    if(active) u.startTime = Date.now();
+    else if(u.startTime){
+      const duration = Math.floor((Date.now()-u.startTime)/1000);
+      io.to(socket.id).emit("log-event", {from:"Admin", to:u.name, duration});
+      u.startTime = null;
+    }
+    io.to(target).emit("admin-speaking",{speaking:active});
+  });
+
+  // Broadcast toggle
+  socket.on('broadcast-toggle', (active)=>{
+    const adminEntry = Object.values(admins).find(a=>a.socketId===socket.id);
+    if(!adminEntry) return;
+    for(let uid in adminEntry.users){
+      io.to(uid).emit("admin-speaking",{speaking:active});
+    }
+  });
+
+  socket.on('disconnect', ()=>{
+    const u = users[socket.id];
+    if(u){
+      io.to(u.adminCode).emit("user-left",{id:socket.id});
+      delete admins[u.adminCode].users[socket.id];
+      delete users[socket.id];
+    } else {
+      // admin disconnect
+      for(let code in admins){
+        if(admins[code].socketId===socket.id){
+          for(let uid in admins[code].users){
+            io.to(uid).emit("admin-offline");
+          }
+          delete admins[code];
+        }
       }
     }
   });
 });
 
-server.listen(10000, () => console.log("Server running on port 10000"));
+server.listen(PORT, ()=>console.log("Server running on port",PORT));
