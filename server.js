@@ -9,165 +9,143 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 const PORT = process.env.PORT || 10000;
 
-// Data structures
-// admins: code -> { socketId, users: { socketId: { name, socketId } } }
-const admins = {};
-// users: socketId -> { name, adminCode, socketId }
-const users = {};
+const admins = {}; // code -> { socketId, users: { socketId: { name } } }
+const users = {};  // socketId -> { name, adminCode }
 
-// generate 4-digit code as string
-function generateCode() {
-  return String(Math.floor(1000 + Math.random() * 9000));
+function genCode(){
+  return String(Math.floor(1000 + Math.random()*9000));
 }
 
 app.use(express.static("public"));
 
 io.on("connection", (socket) => {
-  console.log("socket connected", socket.id);
+  console.log("conn:", socket.id);
 
-  // Admin registers to get a 4-digit code
+  // ADMIN register -> returns 4-digit code
   socket.on("register-admin", () => {
     let code;
-    do { code = generateCode(); } while (admins[code]); // avoid collision
+    do { code = genCode(); } while (admins[code]);
     admins[code] = { socketId: socket.id, users: {} };
     socket.emit("admin-registered", code);
-    console.log("Admin registered:", code);
+    console.log("admin created", code);
 
-    // clean-up if admin disconnects
     socket.on("disconnect", () => {
-      console.log("Admin disconnected:", code);
-      // notify users in that room
-      const adminEntry = admins[code];
-      if (adminEntry) {
-        Object.keys(adminEntry.users).forEach((uid) => {
-          try { io.to(uid).emit("admin-offline"); } catch (e) {}
-        });
+      const entry = admins[code];
+      if (entry) {
+        // notify users admin offline
+        Object.keys(entry.users).forEach(uid => io.to(uid).emit("admin-offline"));
         delete admins[code];
+        console.log("admin disconnected", code);
       }
     });
 
-    // admin toggles broadcast (enable/disable admin audio to all users)
+    // admin toggles broadcast -> notify all users in room
     socket.on("admin-broadcast-toggle", (enabled) => {
-      const adminEntry = admins[code];
-      if (!adminEntry) return;
-      Object.keys(adminEntry.users).forEach(uid => {
-        io.to(uid).emit("admin-broadcast", { enabled });
-      });
+      const room = admins[code];
+      if (!room) return;
+      Object.keys(room.users).forEach(uid => io.to(uid).emit("admin-broadcast", { enabled }));
     });
 
-    // admin wants to talk to specific user (enable/disable)
-    // { targetSocketId, enabled }
+    // admin toggles talk to a particular user (option B)
     socket.on("admin-talk-toggle", ({ target, enabled }) => {
-      const adminEntry = admins[code];
-      if (!adminEntry) return;
-      // notify that user to expect admin audio
+      const room = admins[code];
+      if (!room) return;
+      // notify target
       io.to(target).emit("admin-talk", { enabled });
-      // notify other users admin stopped for them (option B)
-      Object.keys(adminEntry.users).forEach(uid => {
+      // notify others to stop
+      Object.keys(room.users).forEach(uid => {
         if (uid !== target) io.to(uid).emit("admin-talk", { enabled: false });
       });
-      // server also emit a log event when admin stops (client responsible for duration end logging)
-      // For simplicity, clients will emit session-end events; server just forwards.
     });
 
-    // forward signaling messages from admin to a user target
-    socket.on("admin-offer", ({ target, sdp }) => {
-      if (admins[code] && admins[code].users[target]) {
-        io.to(target).emit("offer-from-admin", { from: socket.id, sdp });
-      }
+    // admin receives offer-from-admin? (we will use admin->user renegotiation via 'offer-from-admin')
+    socket.on("offer-from-admin", ({ target, sdp }) => {
+      io.to(target).emit("offer-from-admin", { from: socket.id, sdp });
     });
 
-    socket.on("admin-ice", ({ target, candidate }) => {
+    socket.on("ice-from-admin", ({ target, candidate }) => {
       io.to(target).emit("ice-from-admin", { from: socket.id, candidate });
     });
 
-    // admin may ask server to request current users list
+    // admin may request list
     socket.on("request-users", () => {
-      const adminEntry = admins[code];
-      if (!adminEntry) return;
-      const list = Object.entries(adminEntry.users).map(([id, u]) => ({ id, name: u.name }));
+      const room = admins[code];
+      if (!room) return;
+      const list = Object.entries(room.users).map(([id, u]) => ({ id, name: u.name }));
       socket.emit("users-list", list);
     });
   });
 
-  // User registers with adminCode and name
+  // USER register with adminCode & name
   socket.on("register-user", ({ name, adminCode }) => {
     if (!admins[adminCode]) {
       socket.emit("admin-not-found");
       return;
     }
-    // keep user
-    users[socket.id] = { name, adminCode, socketId: socket.id };
-    admins[adminCode].users[socket.id] = { name, socketId: socket.id };
+    users[socket.id] = { name, adminCode };
+    admins[adminCode].users[socket.id] = { name };
     socket.emit("admin-online");
-    // tell admin someone joined
-    const adminSocketId = admins[adminCode].socketId;
-    io.to(adminSocketId).emit("user-joined", { id: socket.id, name });
+    io.to(admins[adminCode].socketId).emit("user-joined", { id: socket.id, name });
+    console.log("user joined", name, "->", adminCode);
 
-    // user disconnect cleanup
     socket.on("disconnect", () => {
-      if (users[socket.id]) {
-        const { adminCode: ac } = users[socket.id];
+      const u = users[socket.id];
+      if (u) {
+        const ac = u.adminCode;
         if (admins[ac]) {
           delete admins[ac].users[socket.id];
           io.to(admins[ac].socketId).emit("user-left", { id: socket.id });
         }
         delete users[socket.id];
+        console.log("user disconnected", socket.id);
       }
     });
 
-    // user -> admin signaling: user creates offer and sends it to admin
+    // user sends offer to admin (initial offer)
     socket.on("offer-to-admin", ({ sdp }) => {
-      const adminSocketId = admins[adminCode].socketId;
-      io.to(adminSocketId).emit("offer-from-user", { from: socket.id, sdp, name });
+      const adminSocket = admins[adminCode].socketId;
+      io.to(adminSocket).emit("offer-from-user", { from: socket.id, sdp, name });
     });
 
+    // user sends ICE to admin
     socket.on("ice-to-admin", ({ candidate }) => {
-      const adminSocketId = admins[adminCode].socketId;
-      io.to(adminSocketId).emit("ice-from-user", { from: socket.id, candidate });
+      const adminSocket = admins[adminCode].socketId;
+      io.to(adminSocket).emit("ice-from-user", { from: socket.id, candidate });
     });
 
-    // user sends answer (after admin creates offer for renegotiation) - forwarded to admin
+    // user receives offer-from-admin (renegotiation) -> user will answer and send answer-to-admin
     socket.on("answer-to-admin", ({ sdp }) => {
-      const adminSocketId = admins[adminCode].socketId;
-      io.to(adminSocketId).emit("answer-from-user", { from: socket.id, sdp });
+      const adminSocket = admins[adminCode].socketId;
+      io.to(adminSocket).emit("answer-from-user", { from: socket.id, sdp });
     });
 
-    // user tells server when they start/stop talking (so server can log and forward)
-    // { speaking: true/false, ts: Date.now() }
+    // user ice to admin for renegotiation
+    socket.on("ice-to-admin-after", ({ candidate }) => {
+      const adminSocket = admins[adminCode].socketId;
+      io.to(adminSocket).emit("ice-from-user-after", { from: socket.id, candidate });
+    });
+
+    // user speaking events for logs
     socket.on("user-speaking", ({ speaking, ts }) => {
       const u = users[socket.id];
       if (!u) return;
-      const adminSocketId = admins[u.adminCode].socketId;
-      // forward to admin so admin UI can show speaking indicator
-      io.to(adminSocketId).emit("user-speaking", { id: socket.id, name: u.name, speaking, ts });
-      // server can track durations if desired; but we'll let clients compute durations and emit 'session-end' to server
+      const adminSocket = admins[u.adminCode].socketId;
+      io.to(adminSocket).emit("user-speaking", { id: socket.id, name: u.name, speaking, ts });
     });
 
-    // user or admin emit session-end to log
-    // { from, to, startTs, endTs }
+    // session-end forward
     socket.on("session-end", (entry) => {
-      // forward to admin (for display)
-      const adminSocketId = admins[users[socket.id]?.adminCode]?.socketId || null;
-      if (adminSocketId) io.to(adminSocketId).emit("log-event", entry);
-    });
-
-    // Admin may also ask to rename a user (admin emits this)
-    socket.on("rename-to-admin", ({ target, newName }) => {
-      // only meaningful from admin-side but leaving for completeness
-      const adminSocket = admins[adminCode];
-      if (adminSocket && adminSocket.users[target]) {
-        admins[adminCode].users[target].name = newName;
-        io.to(target).emit("name-updated", { newName });
-        io.to(adminSocket.socketId).emit("user-renamed", { id: target, newName });
-      }
+      const u = users[socket.id];
+      if (!u) return;
+      const adminSocket = admins[u.adminCode].socketId;
+      io.to(adminSocket).emit("log-event", entry);
     });
   });
 
-  // global ICE/result forwarding if messages include to/from fields (safety)
+  // Generic forwarding endpoints (if needed)
   socket.on("forward", ({ to, ev, payload }) => {
     if (to) io.to(to).emit(ev, payload);
   });
 });
 
-server.listen(PORT, () => console.log("Signaling server running on port", PORT));
+server.listen(PORT, () => console.log("Server running on port", PORT));
