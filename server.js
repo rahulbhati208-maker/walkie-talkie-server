@@ -1,186 +1,236 @@
-// server.js
-// Signaling server for Walkie (matches your adminok.html and userok.html signalling)
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIo = require('socket.io');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
-
-const PORT = process.env.PORT || 10000;
-
-// client storage
-// clients: clientId -> { socketId, clientId, name, role ('admin'|'user'), online, lastSeen }
-const clients = {};
-
-// helper find admin
-function findAdmin() {
-  for (const id in clients) {
-    const c = clients[id];
-    if (c.role === 'admin' && c.online) return c;
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
   }
-  return null;
-}
-
-app.get('/', (req, res) => res.send('Walkie signaling server'));
-
-// socket.io logic
-io.on('connection', (socket) => {
-  console.log('conn:', socket.id);
-
-  // register: { clientId, role, name }
-  socket.on('register', ({ clientId, role, name }) => {
-    if (!clientId) clientId = 'c_' + Math.random().toString(36).slice(2,9);
-    clients[clientId] = clients[clientId] || {};
-    clients[clientId].socketId = socket.id;
-    clients[clientId].clientId = clientId;
-    clients[clientId].role = role || clients[clientId].role || 'user';
-    clients[clientId].name = name || clients[clientId].name || clientId;
-    clients[clientId].online = true;
-    clients[clientId].lastSeen = Date.now();
-    console.log('register', clientId, role, name);
-    // ack
-    socket.emit('registered', { clientId });
-    // notify admin/admin UI if needed
-    // broadcast clients list to all admins
-    Object.values(clients).forEach(c => {
-      if (c.role === 'admin' && c.socketId && c.socketId !== socket.id) {
-        io.to(c.socketId).emit('clients_list', Object.values(clients).map(x => ({
-          clientId: x.clientId, name: x.name, role: x.role, online: !!x.online
-        })));
-      }
-    });
-  });
-
-  // request_clients -> return list of clients
-  socket.on('request_clients', () => {
-    const list = Object.values(clients).map(x => ({
-      clientId: x.clientId, name: x.name, role: x.role, online: !!x.online
-    }));
-    socket.emit('clients_list', list);
-  });
-
-  // who_is_admin (callback style)
-  socket.on('who_is_admin', (payload, cb) => {
-    const adm = findAdmin();
-    if (cb && typeof cb === 'function') {
-      cb({ adminId: adm ? adm.clientId : null });
-    } else {
-      socket.emit('who_is_admin', { adminId: adm ? adm.clientId : null });
-    }
-  });
-
-  // rename
-  socket.on('rename', ({ clientId, newName }) => {
-    if (clients[clientId]) {
-      clients[clientId].name = newName;
-      // notify admins of updated list
-      Object.values(clients).forEach(c => {
-        if (c.role === 'admin' && c.socketId) {
-          io.to(c.socketId).emit('clients_list', Object.values(clients).map(x => ({
-            clientId: x.clientId, name: x.name, role: x.role, online: !!x.online
-          })));
-        }
-      });
-    }
-  });
-
-  // generic chat_log - forward to admins and store to logs if you want (here just forward)
-  socket.on('chat_log', (entry) => {
-    // entry: { from, to, ts, bytes, duration }
-    // send to admin(s) and to recipient if online
-    if (!entry) return;
-    // send to all admins
-    Object.values(clients).forEach(c => {
-      if (c.role === 'admin' && c.socketId) {
-        io.to(c.socketId).emit('chat_log', entry);
-      }
-    });
-    // forward to recipient if online
-    if (entry.to && clients[entry.to] && clients[entry.to].socketId) {
-      io.to(clients[entry.to].socketId).emit('chat_log', entry);
-    }
-  });
-
-  // session_stats forwarding
-  socket.on('session_stats', (stat) => {
-    // forward to admin if present
-    const adm = findAdmin();
-    if (adm && adm.socketId) io.to(adm.socketId).emit('session_stats', stat);
-  });
-
-  // ---------- WebRTC signalling (events names used in your old files) ----------
-  // webrtc_offer: { from, to, sdp }
-  socket.on('webrtc_offer', ({ from, to, sdp }) => {
-    if (!to) return;
-    if (clients[to] && clients[to].socketId) {
-      io.to(clients[to].socketId).emit('webrtc_offer', { from, sdp });
-    } else {
-      console.log('webrtc_offer -> target offline', to);
-    }
-  });
-
-  // webrtc_answer: { from, to, sdp }
-  socket.on('webrtc_answer', ({ from, to, sdp }) => {
-    if (!to) return;
-    if (clients[to] && clients[to].socketId) {
-      io.to(clients[to].socketId).emit('webrtc_answer', { from, sdp });
-    }
-  });
-
-  // webrtc_ice: { from, to, candidate }
-  socket.on('webrtc_ice', ({ from, to, candidate }) => {
-    if (!to) return;
-    if (clients[to] && clients[to].socketId) {
-      io.to(clients[to].socketId).emit('webrtc_ice', { from, candidate });
-    }
-  });
-
-  // start_talk / stop_talk events -> broadcast speaking state
-  // payload example { from: clientId, target: 'ALL' | 'admin' | userId }
-  socket.on('start_talk', (payload) => {
-    if (!payload) return;
-    // forward to everyone so UIs update
-    Object.values(clients).forEach(c => {
-      if (c.socketId) io.to(c.socketId).emit('speaking', { clientId: payload.from, speaking: true, target: payload.target });
-    });
-  });
-  socket.on('stop_talk', (payload) => {
-    if (!payload) return;
-    Object.values(clients).forEach(c => {
-      if (c.socketId) io.to(c.socketId).emit('speaking', { clientId: payload.from, speaking: false, target: payload.target });
-    });
-  });
-
-  // request to get a fresh clients list on demand
-  socket.on('request_clients', () => {
-    const list = Object.values(clients).map(x => ({
-      clientId: x.clientId, name: x.name, role: x.role, online: !!x.online
-    }));
-    socket.emit('clients_list', list);
-  });
-
-  // disconnect handling
-  socket.on('disconnect', () => {
-    // mark any client with this socket as offline
-    for (const id in clients) {
-      if (clients[id].socketId === socket.id) {
-        clients[id].online = false;
-        clients[id].lastSeen = Date.now();
-        console.log('client offline', id, clients[id].role);
-        // notify admins
-        Object.values(clients).forEach(c => {
-          if (c.role === 'admin' && c.socketId) {
-            io.to(c.socketId).emit('clients_list', Object.values(clients).map(x => ({
-              clientId: x.clientId, name: x.name, role: x.role, online: !!x.online
-            })));
-          }
-        });
-      }
-    }
-  });
-
 });
 
-server.listen(PORT, () => console.log('Signaling server running on port', PORT));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+// Store rooms and users
+const rooms = new Map();
+const userRecordings = new Map();
+
+// Generate 4-digit room code
+function generateRoomCode() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+// Routes
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'user.html'));
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  // Admin creates room
+  socket.on('create-room', (data) => {
+    const roomCode = generateRoomCode();
+    const room = {
+      code: roomCode,
+      admin: socket.id,
+      users: new Map(),
+      blockedUsers: new Set()
+    };
+    rooms.set(roomCode, room);
+    
+    socket.join(roomCode);
+    socket.emit('room-created', { roomCode });
+    console.log(`Room created: ${roomCode} by admin ${socket.id}`);
+  });
+
+  // User joins room
+  socket.on('join-room', (data) => {
+    const { roomCode, userName } = data;
+    const room = rooms.get(roomCode);
+
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    if (room.blockedUsers.has(userName)) {
+      socket.emit('error', { message: 'You are blocked from this room' });
+      return;
+    }
+
+    room.users.set(socket.id, {
+      id: socket.id,
+      name: userName,
+      isTalking: false
+    });
+
+    socket.join(roomCode);
+    socket.emit('room-joined', { roomCode, userName });
+    
+    // Notify admin about new user
+    socket.to(room.admin).emit('user-joined', {
+      userId: socket.id,
+      userName: userName
+    });
+
+    // Send current users to admin
+    const users = Array.from(room.users.values());
+    socket.to(room.admin).emit('users-update', users);
+  });
+
+  // Start talking (push-to-talk)
+  socket.on('start-talking', (data) => {
+    const { targetUserId, roomCode } = data;
+    const room = rooms.get(roomCode);
+    
+    if (!room) return;
+
+    const speaker = room.users.get(socket.id) || 
+                   (socket.id === room.admin ? { id: socket.id, name: 'Admin', isTalking: true } : null);
+    
+    if (speaker) {
+      speaker.isTalking = true;
+      
+      // Create recording session
+      const recordingId = uuidv4();
+      userRecordings.set(recordingId, {
+        roomCode,
+        from: speaker.name,
+        to: targetUserId === 'all' ? 'All Users' : (room.users.get(targetUserId)?.name || 'Admin'),
+        startTime: new Date(),
+        audioData: []
+      });
+
+      // Notify all in room about who is talking to whom
+      io.to(roomCode).emit('user-talking', {
+        userId: socket.id,
+        targetUserId: targetUserId,
+        isTalking: true,
+        recordingId: recordingId
+      });
+
+      socket.emit('recording-started', { recordingId });
+    }
+  });
+
+  // Stop talking
+  socket.on('stop-talking', (data) => {
+    const { recordingId, audioBlob } = data;
+    const roomCode = Array.from(rooms.entries()).find(([code, room]) => 
+      room.users.has(socket.id) || room.admin === socket.id
+    )?.[0];
+
+    if (roomCode) {
+      const room = rooms.get(roomCode);
+      const speaker = room.users.get(socket.id) || 
+                     (socket.id === room.admin ? { id: socket.id, name: 'Admin' } : null);
+      
+      if (speaker) {
+        speaker.isTalking = false;
+
+        // Update recording
+        const recording = userRecordings.get(recordingId);
+        if (recording) {
+          recording.endTime = new Date();
+          recording.audioBlob = audioBlob;
+        }
+
+        // Notify all to stop talking indicators
+        io.to(roomCode).emit('user-talking', {
+          userId: socket.id,
+          isTalking: false
+        });
+
+        // Send recording data to relevant users
+        if (recording) {
+          const targetSocket = recording.to === 'Admin' ? room.admin : 
+                             Array.from(room.users.entries()).find(([id, user]) => user.name === recording.to)?.[0];
+          
+          if (targetSocket) {
+            io.to(targetSocket).emit('recording-complete', {
+              recordingId,
+              from: recording.from,
+              to: recording.to,
+              timestamp: recording.startTime,
+              audioBlob: audioBlob
+            });
+          }
+
+          // Also send to admin for records
+          io.to(room.admin).emit('recording-complete', {
+            recordingId,
+            from: recording.from,
+            to: recording.to,
+            timestamp: recording.startTime,
+            audioBlob: audioBlob
+          });
+        }
+      }
+    }
+  });
+
+  // Block user
+  socket.on('block-user', (data) => {
+    const { roomCode, userName } = data;
+    const room = rooms.get(roomCode);
+    
+    if (room && socket.id === room.admin) {
+      room.blockedUsers.add(userName);
+      
+      // Find and disconnect blocked user
+      const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
+      if (userEntry) {
+        const [userId, user] = userEntry;
+        io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
+        room.users.delete(userId);
+        socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
+      }
+    }
+  });
+
+  // Disconnection handling
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    
+    // Find room where this socket was admin or user
+    for (const [roomCode, room] of rooms.entries()) {
+      if (room.admin === socket.id) {
+        // Admin disconnected - close room
+        io.to(roomCode).emit('room-closed');
+        rooms.delete(roomCode);
+        break;
+      } else if (room.users.has(socket.id)) {
+        // User disconnected
+        const user = room.users.get(socket.id);
+        room.users.delete(socket.id);
+        
+        // Notify admin
+        socket.to(room.admin).emit('user-left', {
+          userId: socket.id,
+          userName: user.name
+        });
+        
+        // Send updated users list to admin
+        const users = Array.from(room.users.values());
+        socket.to(room.admin).emit('users-update', users);
+        break;
+      }
+    }
+  });
+});
+
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
