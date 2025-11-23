@@ -38,51 +38,166 @@ app.get('/', (req, res) => {
     <title>User - Walkie Talkie</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 500px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
-        .header { background: #2c3e50; color: white; padding: 20px; text-align: center; }
-        .connection-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 14px; }
-        .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #e74c3c; }
-        .status-dot.connected { background: #27ae60; animation: pulse 1s infinite; }
-        .status-dot.reconnecting { background: #f39c12; animation: pulse 0.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        .join-section, .chat-section { padding: 30px; }
-        .input-group { display: flex; flex-direction: column; gap: 15px; margin: 20px 0; }
-        input { padding: 15px; border: 2px solid #bdc3c7; border-radius: 8px; font-size: 16px; }
-        input:focus { outline: none; border-color: #3498db; }
-        button { background: #3498db; color: white; border: none; padding: 15px; border-radius: 25px; cursor: pointer; font-size: 16px; transition: all 0.3s ease; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            background: #f5f5f5; 
+            min-height: 100vh; 
+            padding: 20px; 
+        }
+        .container { 
+            max-width: 400px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 12px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            overflow: hidden; 
+        }
+        .header { 
+            background: #2c3e50; 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        .connection-status { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 8px; 
+            margin-top: 8px; 
+            font-size: 13px; 
+        }
+        .status-dot { 
+            width: 8px; 
+            height: 8px; 
+            border-radius: 50%; 
+            background: #95a5a6; 
+        }
+        .status-dot.connected { background: #27ae60; }
+        .status-dot.reconnecting { background: #f39c12; animation: pulse 1s infinite; }
+        @keyframes pulse { 
+            0% { opacity: 1; } 
+            50% { opacity: 0.5; } 
+            100% { opacity: 1; } 
+        }
+        .join-section, .chat-section { padding: 24px; }
+        .input-group { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
+        input { 
+            padding: 12px; 
+            border: 1px solid #ddd; 
+            border-radius: 6px; 
+            font-size: 14px; 
+            background: #fafafa;
+        }
+        input:focus { 
+            outline: none; 
+            border-color: #3498db; 
+            background: white;
+        }
+        button { 
+            background: #3498db; 
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px; 
+            transition: all 0.2s ease; 
+        }
         button:hover { background: #2980b9; }
-        button:disabled { background: #95a5a6; cursor: not-allowed; }
-        .talk-btn { background: #27ae60; font-size: 18px; font-weight: bold; padding: 20px; width: 150px; height: 150px; border-radius: 50%; margin: 20px auto; display: block; }
-        .talk-btn.talking { background: #e74c3c; animation: pulse 1s infinite; }
-        .talk-btn:disabled { background: #95a5a6; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .talk-btn { 
+            background: #27ae60; 
+            font-size: 16px; 
+            font-weight: 600; 
+            padding: 16px; 
+            width: 120px; 
+            height: 120px; 
+            border-radius: 50%; 
+            margin: 20px auto; 
+            display: block; 
+        }
+        .talk-btn.talking { 
+            background: #e74c3c; 
+        }
+        .talk-btn:disabled { background: #bdc3c7; }
         .hidden { display: none; }
-        .error-message { background: #e74c3c; color: white; padding: 15px; border-radius: 8px; margin: 15px 0; text-align: center; }
-        .success-message { background: #27ae60; color: white; padding: 15px; border-radius: 8px; margin: 15px 0; text-align: center; }
-        .status-indicators { display: flex; justify-content: center; gap: 30px; margin: 20px 0; }
-        .status-item { display: flex; align-items: center; gap: 10px; }
-        .status-dot { width: 20px; height: 20px; border-radius: 50%; background: #95a5a6; }
-        .status-dot.active { background: #27ae60; animation: status-pulse 1s infinite; }
+        .error-message { 
+            background: #e74c3c; 
+            color: white; 
+            padding: 12px; 
+            border-radius: 6px; 
+            margin: 12px 0; 
+            text-align: center; 
+            font-size: 13px;
+        }
+        .success-message { 
+            background: #27ae60; 
+            color: white; 
+            padding: 12px; 
+            border-radius: 6px; 
+            margin: 12px 0; 
+            text-align: center; 
+            font-size: 13px;
+        }
+        .status-indicators { 
+            display: flex; 
+            justify-content: center; 
+            gap: 24px; 
+            margin: 16px 0; 
+        }
+        .status-item { 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+            font-size: 13px;
+            color: #666;
+        }
+        .status-dot { 
+            width: 12px; 
+            height: 12px; 
+            border-radius: 50%; 
+            background: #bdc3c7; 
+        }
+        .status-dot.active { background: #27ae60; }
         .admin-status.active { background: #e74c3c; }
-        @keyframes status-pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        .user-info { text-align: center; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px; }
-        .mic-indicator { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0; }
-        .mic-dot { width: 15px; height: 15px; border-radius: 50%; background: #e74c3c; }
-        .mic-dot.active { background: #27ae60; animation: mic-pulse 0.3s infinite; }
-        @keyframes mic-pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        .user-info { 
+            text-align: center; 
+            margin-bottom: 16px; 
+            padding: 12px; 
+            background: #f8f9fa; 
+            border-radius: 6px; 
+            font-size: 13px;
+            color: #555;
+        }
+        .mic-indicator { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 8px; 
+            margin: 12px 0; 
+            font-size: 13px;
+            color: #666;
+        }
+        .mic-dot { 
+            width: 10px; 
+            height: 10px; 
+            border-radius: 50%; 
+            background: #e74c3c; 
+        }
+        .mic-dot.active { background: #27ae60; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Walkie Talkie User</h1>
+            <h1 style="font-size: 20px; margin-bottom: 8px;">Walkie Talkie</h1>
             <div class="connection-status">
                 <div class="status-dot" id="connectionStatus"></div>
                 <span id="connectionText">Connecting...</span>
             </div>
         </div>
         <div class="join-section" id="joinSection">
-            <h2>Join Room</h2>
+            <h2 style="font-size: 16px; color: #2c3e50; margin-bottom: 16px; text-align: center;">Join Room</h2>
             <div class="input-group">
                 <input type="text" id="userName" placeholder="Enter your name" maxlength="20">
                 <input type="text" id="roomCode" placeholder="Enter 4-digit room code" maxlength="4" pattern="[0-9]{4}">
@@ -97,10 +212,10 @@ app.get('/', (req, res) => {
             
             <div class="mic-indicator">
                 <div class="mic-dot" id="micIndicator"></div>
-                <span>Microphone Access</span>
+                <span>Microphone Ready</span>
             </div>
             
-            <button id="talkBtn" class="talk-btn" disabled>Press to Talk</button>
+            <button id="talkBtn" class="talk-btn" disabled>Click to Talk</button>
             <div class="status-indicators">
                 <div class="status-item">
                     <div class="status-dot" id="userStatus"></div>
@@ -127,8 +242,7 @@ app.get('/', (req, res) => {
                 this.isTalking = false;
                 this.localStream = null;
                 this.audioContext = null;
-                this.mediaStreamSource = null;
-                this.scriptProcessor = null;
+                this.mediaRecorder = null;
                 this.reconnectAttempts = 0;
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
@@ -303,31 +417,15 @@ app.get('/', (req, res) => {
 
             initAdmin() {
                 document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                document.getElementById('talkToAllBtn').addEventListener('mousedown', () => this.startTalking('all'));
-                document.getElementById('talkToAllBtn').addEventListener('mouseup', () => this.stopTalking());
-                document.getElementById('talkToAllBtn').addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startTalking('all');
-                });
-                document.getElementById('talkToAllBtn').addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopTalking();
-                });
+                document.getElementById('talkToAllBtn').addEventListener('click', () => this.toggleTalking('all'));
+                
+                // Test microphone for admin too
+                this.testMicrophoneAccess();
             }
 
             initUser() {
                 document.getElementById('joinRoomBtn').addEventListener('click', () => this.joinRoom());
-                const talkBtn = document.getElementById('talkBtn');
-                talkBtn.addEventListener('mousedown', () => this.startTalking('admin'));
-                talkBtn.addEventListener('mouseup', () => this.stopTalking());
-                talkBtn.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startTalking('admin');
-                });
-                talkBtn.addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopTalking();
-                });
+                document.getElementById('talkBtn').addEventListener('click', () => this.toggleTalking('admin'));
                 
                 document.getElementById('userName').addEventListener('keypress', (e) => {
                     if (e.key === 'Enter') this.joinRoom();
@@ -346,12 +444,10 @@ app.get('/', (req, res) => {
                             echoCancellation: true,
                             noiseSuppression: true,
                             autoGainControl: true,
-                            channelCount: 1
+                            channelCount: 1,
+                            sampleRate: 16000
                         } 
                     });
-                    
-                    // Initialize audio context for processing
-                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     
                     document.getElementById('micIndicator').classList.add('active');
                     console.log('Microphone access granted');
@@ -400,7 +496,7 @@ app.get('/', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
                 });
 
-                this.socket.on('audio-data', (data) => {
+                this.socket.on('audio-stream', (data) => {
                     this.playAudio(data.audioData);
                 });
 
@@ -452,12 +548,20 @@ app.get('/', (req, res) => {
                 this.socket.emit('join-room', { roomCode, userName });
             }
 
-            async startTalking(targetUserId) {
+            toggleTalking(targetUserId) {
                 if (!this.roomCode || !this.socket.connected) {
                     this.showError('Not connected to room');
                     return;
                 }
                 
+                if (this.isTalking) {
+                    this.stopTalking();
+                } else {
+                    this.startTalking(targetUserId);
+                }
+            }
+
+            async startTalking(targetUserId) {
                 console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
                 
@@ -465,13 +569,17 @@ app.get('/', (req, res) => {
                     const talkBtn = targetUserId === 'all' ? 
                         document.getElementById('talkToAllBtn') : 
                         document.getElementById('talk-btn-' + targetUserId);
-                    if (talkBtn) talkBtn.classList.add('talking');
+                    if (talkBtn) {
+                        talkBtn.classList.add('talking');
+                        talkBtn.textContent = targetUserId === 'all' ? 'Stop Talking to All' : 'Stop Talking';
+                    }
                 } else {
                     document.getElementById('talkBtn').classList.add('talking');
+                    document.getElementById('talkBtn').textContent = 'Stop Talking';
                     document.getElementById('userStatus').classList.add('active');
                 }
 
-                // Start capturing and streaming audio
+                // Start audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -481,17 +589,21 @@ app.get('/', (req, res) => {
             }
 
             stopTalking() {
-                if (!this.isTalking) return;
-                
                 console.log('Stop talking');
                 this.isTalking = false;
                 
                 if (this.isAdmin) {
                     document.querySelectorAll('.talk-btn').forEach(btn => {
                         btn.classList.remove('talking');
+                        if (btn.id === 'talkToAllBtn') {
+                            btn.textContent = 'Talk to All Users';
+                        } else if (btn.id.startsWith('talk-btn-')) {
+                            btn.textContent = 'Talk';
+                        }
                     });
                 } else {
                     document.getElementById('talkBtn').classList.remove('talking');
+                    document.getElementById('talkBtn').textContent = 'Click to Talk';
                     document.getElementById('userStatus').classList.remove('active');
                 }
 
@@ -511,40 +623,36 @@ app.get('/', (req, res) => {
                                 echoCancellation: true,
                                 noiseSuppression: true,
                                 autoGainControl: true,
-                                channelCount: 1
+                                channelCount: 1,
+                                sampleRate: 16000
                             } 
                         });
                     }
 
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
+                    // Use MediaRecorder for better audio quality
+                    this.mediaRecorder = new MediaRecorder(this.localStream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
 
-                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking) {
-                            const inputBuffer = audioProcessingEvent.inputBuffer;
-                            const inputData = inputBuffer.getChannelData(0);
+                    let audioChunks = [];
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
                             
-                            // Convert Float32Array to Int16Array for smaller data size
-                            const int16Data = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
-                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-                            }
-                            
-                            // Send audio data via socket
-                            this.socket.emit('audio-data', {
-                                roomCode: this.roomCode,
-                                audioData: Array.from(int16Data),
-                                sampleRate: this.audioContext.sampleRate
-                            });
+                            // Convert to base64 and send
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                this.socket.emit('audio-stream', {
+                                    roomCode: this.roomCode,
+                                    audioData: reader.result
+                                });
+                            };
+                            reader.readAsDataURL(event.data);
                         }
                     };
 
-                    this.mediaStreamSource.connect(this.scriptProcessor);
-                    this.scriptProcessor.connect(this.audioContext.destination);
+                    this.mediaRecorder.start(100); // Collect data every 100ms
                     
                     console.log('Audio streaming started');
                 } catch (error) {
@@ -554,38 +662,29 @@ app.get('/', (req, res) => {
             }
 
             stopAudioStreaming() {
-                if (this.scriptProcessor) {
-                    this.scriptProcessor.disconnect();
-                    this.scriptProcessor = null;
-                }
-                if (this.mediaStreamSource) {
-                    this.mediaStreamSource.disconnect();
-                    this.mediaStreamSource = null;
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.mediaRecorder.stop();
                 }
                 console.log('Audio streaming stopped');
             }
 
             playAudio(audioData) {
                 try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
-
-                    const int16Data = new Int16Array(audioData);
-                    const float32Data = new Float32Array(int16Data.length);
+                    // Convert base64 to blob
+                    const byteString = atob(audioData.split(',')[1]);
+                    const mimeString = audioData.split(',')[0].split(':')[1].split(';')[0];
+                    const ab = new ArrayBuffer(byteString.length);
+                    const ia = new Uint8Array(ab);
                     
-                    // Convert Int16Array back to Float32Array
-                    for (let i = 0; i < int16Data.length; i++) {
-                        float32Data[i] = int16Data[i] / 32768;
+                    for (let i = 0; i < byteString.length; i++) {
+                        ia[i] = byteString.charCodeAt(i);
                     }
-
-                    const audioBuffer = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
-                    audioBuffer.getChannelData(0).set(float32Data);
-
-                    const source = this.audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(this.audioContext.destination);
-                    source.start();
+                    
+                    const blob = new Blob([ab], { type: mimeString });
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    const audio = new Audio(audioUrl);
+                    audio.play().catch(e => console.log('Audio play failed:', e));
                     
                     console.log('Playing received audio');
                 } catch (error) {
@@ -598,27 +697,19 @@ app.get('/', (req, res) => {
 
                 const usersList = document.getElementById('usersList');
 
-                const userCard = document.createElement('div');
-                userCard.className = 'user-card';
-                userCard.id = 'user-' + userId;
-                userCard.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
+                const userCircle = document.createElement('div');
+                userCircle.className = 'user-circle';
+                userCircle.id = 'user-' + userId;
+                userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
-                    '<button class="individual-talk-btn" id="talk-btn-' + userId + '">Talk</button>' +
-                    '<button class="block-btn" onclick="app.blockUser(\\'' + userName + '\\')">Block</button>';
+                    '<div class="user-status online"></div>' +
+                    '<button class="talk-user-btn" id="talk-btn-' + userId + '">Talk</button>' +
+                    '<button class="block-btn" onclick="app.toggleBlockUser(\\'' + userName + '\\')">Block</button>';
 
-                usersList.appendChild(userCard);
+                usersList.appendChild(userCircle);
 
                 const talkBtn = document.getElementById('talk-btn-' + userId);
-                talkBtn.addEventListener('mousedown', () => this.startTalking(userId));
-                talkBtn.addEventListener('mouseup', () => this.stopTalking());
-                talkBtn.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startTalking(userId);
-                });
-                talkBtn.addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopTalking();
-                });
+                talkBtn.addEventListener('click', () => this.toggleTalking(userId));
             }
 
             removeUserFromUI(userId) {
@@ -639,19 +730,20 @@ app.get('/', (req, res) => {
 
             updateTalkingIndicator(userId, targetUserId, isTalking) {
                 if (this.isAdmin) {
-                    const userCard = document.getElementById('user-' + userId);
-                    if (userCard) {
+                    const userCircle = document.getElementById('user-' + userId);
+                    if (userCircle) {
+                        // User is talking (green)
                         if (isTalking && userId !== this.socket.id) {
-                            userCard.classList.add('talking');
+                            userCircle.classList.add('talking');
                         } else {
-                            userCard.classList.remove('talking');
+                            userCircle.classList.remove('talking');
                         }
                         
-                        // Make user glow when admin is talking to them
+                        // Admin is talking to this user (red)
                         if (isTalking && targetUserId === userId) {
-                            userCard.classList.add('receiving');
+                            userCircle.classList.add('receiving');
                         } else {
-                            userCard.classList.remove('receiving');
+                            userCircle.classList.remove('receiving');
                         }
                     }
                 } else {
@@ -662,10 +754,10 @@ app.get('/', (req, res) => {
                 }
             }
 
-            blockUser(userName) {
+            toggleBlockUser(userName) {
                 if (this.isAdmin && this.roomCode) {
-                    console.log('Blocking user:', userName);
-                    this.socket.emit('block-user', {
+                    console.log('Toggling block for user:', userName);
+                    this.socket.emit('toggle-block-user', {
                         roomCode: this.roomCode,
                         userName: userName
                     });
@@ -684,10 +776,12 @@ app.get('/', (req, res) => {
                     document.getElementById('roomCode').textContent = '----';
                     document.getElementById('usersList').innerHTML = '';
                     document.getElementById('talkToAllBtn').disabled = true;
+                    document.getElementById('talkToAllBtn').textContent = 'Talk to All Users';
                 } else {
                     document.getElementById('joinSection').classList.remove('hidden');
                     document.getElementById('chatSection').classList.add('hidden');
                     document.getElementById('talkBtn').disabled = true;
+                    document.getElementById('talkBtn').textContent = 'Click to Talk';
                 }
                 this.roomCode = null;
                 this.userName = null;
@@ -705,7 +799,7 @@ app.get('/', (req, res) => {
                     successElement.classList.remove('hidden');
                     setTimeout(() => {
                         successElement.classList.add('hidden');
-                    }, 5000);
+                    }, 3000);
                 }
             }
 
@@ -739,65 +833,229 @@ app.get('/admin', (req, res) => {
     <title>Admin - Walkie Talkie</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
-        .header { background: #2c3e50; color: white; padding: 20px; text-align: center; }
-        .connection-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 14px; }
-        .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #e74c3c; }
-        .status-dot.connected { background: #27ae60; animation: pulse 1s infinite; }
-        .status-dot.reconnecting { background: #f39c12; animation: pulse 0.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        .room-info { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; flex-wrap: wrap; }
-        #roomCode { font-size: 2em; font-weight: bold; color: #f39c12; background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 10px; margin: 0 10px; }
-        button { background: #3498db; color: white; border: none; padding: 12px 24px; border-radius: 25px; cursor: pointer; font-size: 16px; transition: all 0.3s ease; margin: 5px; }
-        button:hover { background: #2980b9; transform: translateY(-2px); }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            background: #f5f5f5; 
+            min-height: 100vh; 
+            padding: 20px; 
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 12px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            overflow: hidden; 
+        }
+        .header { 
+            background: #2c3e50; 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        .connection-status { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 8px; 
+            margin-top: 8px; 
+            font-size: 13px; 
+        }
+        .status-dot { 
+            width: 8px; 
+            height: 8px; 
+            border-radius: 50%; 
+            background: #95a5a6; 
+        }
+        .status-dot.connected { background: #27ae60; }
+        .status-dot.reconnecting { background: #f39c12; animation: pulse 1s infinite; }
+        @keyframes pulse { 
+            0% { opacity: 1; } 
+            50% { opacity: 0.5; } 
+            100% { opacity: 1; } 
+        }
+        .room-info { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-top: 12px; 
+            flex-wrap: wrap; 
+            gap: 12px;
+        }
+        #roomCode { 
+            font-size: 24px; 
+            font-weight: bold; 
+            color: #f39c12; 
+            background: rgba(255,255,255,0.1); 
+            padding: 8px 16px; 
+            border-radius: 6px; 
+        }
+        button { 
+            background: #3498db; 
+            color: white; 
+            border: none; 
+            padding: 10px 16px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 13px; 
+            transition: all 0.2s ease; 
+        }
+        button:hover { background: #2980b9; }
         button:active { transform: translateY(0); }
-        button:disabled { background: #95a5a6; cursor: not-allowed; }
-        .talk-btn { background: #27ae60; font-size: 18px; font-weight: bold; padding: 15px 30px; }
-        .talk-btn.talking { background: #e74c3c; animation: pulse 1s infinite; }
-        .talk-btn:disabled { background: #95a5a6; }
-        .users-container, .controls { padding: 20px; border-bottom: 1px solid #ecf0f1; }
-        .users-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; }
-        .user-card { background: #f8f9fa; border: 2px solid #bdc3c7; border-radius: 10px; padding: 15px; text-align: center; transition: all 0.3s ease; }
-        .user-card.talking { border-color: #27ae60; background: #d5f4e6; animation: glow-green 1s infinite; }
-        .user-card.receiving { border-color: #e74c3c; background: #fadbd8; animation: glow-red 1s infinite; }
-        @keyframes glow-green { 0% { box-shadow: 0 0 5px #27ae60; } 50% { box-shadow: 0 0 20px #27ae60; } 100% { box-shadow: 0 0 5px #27ae60; } }
-        @keyframes glow-red { 0% { box-shadow: 0 0 5px #e74c3c; } 50% { box-shadow: 0 0 20px #e74c3c; } 100% { box-shadow: 0 0 5px #e74c3c; } }
-        .user-avatar { width: 60px; height: 60px; border-radius: 50%; background: #3498db; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; margin: 0 auto 10px; }
-        .user-name { font-weight: bold; margin-bottom: 10px; }
-        .individual-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
-        .individual-talk-btn { background: #9b59b6; }
-        .block-btn { background: #e74c3c; padding: 8px 16px; font-size: 12px; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .talk-btn { 
+            background: #27ae60; 
+            font-size: 14px; 
+            font-weight: 600; 
+            padding: 12px 16px; 
+        }
+        .talk-btn.talking { 
+            background: #e74c3c; 
+        }
+        .talk-btn:disabled { background: #bdc3c7; }
+        .users-container, .controls { 
+            padding: 20px; 
+            border-bottom: 1px solid #ecf0f1; 
+        }
+        .users-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); 
+            gap: 12px; 
+            margin-top: 12px; 
+        }
+        .user-circle { 
+            background: #f8f9fa; 
+            border: 2px solid #e9ecef; 
+            border-radius: 50%; 
+            padding: 16px; 
+            text-align: center; 
+            position: relative;
+            transition: all 0.3s ease; 
+            width: 80px;
+            height: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .user-circle.talking { 
+            border-color: #27ae60; 
+            background: #d5f4e6; 
+        }
+        .user-circle.receiving { 
+            border-color: #e74c3c; 
+            background: #fadbd8; 
+            animation: glow-red 1s infinite; 
+        }
+        @keyframes glow-red { 
+            0% { box-shadow: 0 0 5px #e74c3c; } 
+            50% { box-shadow: 0 0 15px #e74c3c; } 
+            100% { box-shadow: 0 0 5px #e74c3c; } 
+        }
+        .user-avatar { 
+            font-size: 16px; 
+            font-weight: bold; 
+            color: #2c3e50;
+            margin-bottom: 4px;
+        }
+        .user-name { 
+            font-weight: 600; 
+            font-size: 11px;
+            color: #2c3e50;
+            margin-bottom: 4px;
+        }
+        .user-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #27ae60;
+            position: absolute;
+            top: 8px;
+            right: 8px;
+        }
+        .user-status.offline {
+            background: #bdc3c7;
+        }
+        .user-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        .talk-user-btn, .block-btn { 
+            padding: 4px 8px; 
+            font-size: 10px; 
+            border-radius: 4px;
+        }
+        .talk-user-btn { 
+            background: #9b59b6; 
+        }
+        .talk-user-btn:hover {
+            background: #8e44ad;
+        }
+        .block-btn { 
+            background: #e74c3c; 
+        }
+        .block-btn:hover {
+            background: #c0392b;
+        }
+        .block-btn.blocked {
+            background: #95a5a6;
+        }
         .hidden { display: none !important; }
-        .error-message { background: #e74c3c; color: white; padding: 15px; border-radius: 8px; margin: 15px; text-align: center; }
-        .success-message { background: #27ae60; color: white; padding: 15px; border-radius: 8px; margin: 15px; text-align: center; }
-        @media (max-width: 768px) { .container { margin: 10px; border-radius: 10px; } .room-info { flex-direction: column; gap: 15px; } .users-list { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
+        .error-message { 
+            background: #e74c3c; 
+            color: white; 
+            padding: 12px; 
+            border-radius: 6px; 
+            margin: 12px; 
+            text-align: center; 
+            font-size: 13px;
+        }
+        .success-message { 
+            background: #27ae60; 
+            color: white; 
+            padding: 12px; 
+            border-radius: 6px; 
+            margin: 12px; 
+            text-align: center; 
+            font-size: 13px;
+        }
+        @media (max-width: 768px) { 
+            .container { margin: 10px; border-radius: 8px; } 
+            .room-info { flex-direction: column; gap: 12px; } 
+            .users-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); } 
+        }
+        h2 {
+            font-size: 16px;
+            color: #2c3e50;
+            margin-bottom: 12px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Walkie Talkie Admin</h1>
+            <h1 style="font-size: 20px; margin-bottom: 8px;">Walkie Talkie Admin</h1>
             <div class="connection-status">
                 <div class="status-dot" id="connectionStatus"></div>
                 <span id="connectionText">Connecting...</span>
             </div>
             <div class="room-info">
-                <div id="roomCodeDisplay">Room Code: <span id="roomCode">----</span></div>
+                <div>Room Code: <span id="roomCode">----</span></div>
                 <button id="createRoomBtn" disabled>Create New Room</button>
             </div>
         </div>
 
         <div class="users-container">
             <h2>Connected Users</h2>
-            <div id="usersList" class="users-list"></div>
+            <div id="usersList" class="users-grid"></div>
         </div>
 
         <div class="controls">
             <h2>Admin Controls</h2>
             <div class="talk-controls">
                 <button id="talkToAllBtn" class="talk-btn" disabled>Talk to All Users</button>
-                <div class="individual-controls" id="individualControls"></div>
             </div>
         </div>
 
@@ -815,12 +1073,11 @@ app.get('/admin', (req, res) => {
                 this.isAdmin = true;
                 this.isTalking = false;
                 this.localStream = null;
-                this.audioContext = null;
-                this.mediaStreamSource = null;
-                this.scriptProcessor = null;
+                this.mediaRecorder = null;
                 this.reconnectAttempts = 0;
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
+                this.blockedUsers = new Set();
                 this.init();
             }
 
@@ -942,16 +1199,9 @@ app.get('/admin', (req, res) => {
 
             initAdmin() {
                 document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                document.getElementById('talkToAllBtn').addEventListener('mousedown', () => this.startTalking('all'));
-                document.getElementById('talkToAllBtn').addEventListener('mouseup', () => this.stopTalking());
-                document.getElementById('talkToAllBtn').addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startTalking('all');
-                });
-                document.getElementById('talkToAllBtn').addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopTalking();
-                });
+                document.getElementById('talkToAllBtn').addEventListener('click', () => this.toggleTalking('all'));
+                
+                this.testMicrophoneAccess();
             }
 
             setupSocketListeners() {
@@ -979,7 +1229,7 @@ app.get('/admin', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
                 });
 
-                this.socket.on('audio-data', (data) => {
+                this.socket.on('audio-stream', (data) => {
                     this.playAudio(data.audioData);
                 });
 
@@ -987,6 +1237,18 @@ app.get('/admin', (req, res) => {
                     console.log('User left:', data.userName);
                     this.removeUserFromUI(data.userId);
                     this.showMessage('User ' + data.userName + ' left the room');
+                });
+
+                this.socket.on('user-blocked', (data) => {
+                    this.blockedUsers.add(data.userName);
+                    this.updateBlockButton(data.userName, true);
+                    this.showSuccess('User ' + data.userName + ' has been blocked');
+                });
+
+                this.socket.on('user-unblocked', (data) => {
+                    this.blockedUsers.delete(data.userName);
+                    this.updateBlockButton(data.userName, false);
+                    this.showSuccess('User ' + data.userName + ' has been unblocked');
                 });
 
                 this.socket.on('error', (data) => {
@@ -1000,21 +1262,32 @@ app.get('/admin', (req, res) => {
                 this.socket.emit('create-room');
             }
 
-            async startTalking(targetUserId) {
+            toggleTalking(targetUserId) {
                 if (!this.roomCode || !this.socket.connected) {
                     this.showError('Not connected to room');
                     return;
                 }
                 
+                if (this.isTalking) {
+                    this.stopTalking();
+                } else {
+                    this.startTalking(targetUserId);
+                }
+            }
+
+            async startTalking(targetUserId) {
                 console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
                 
                 const talkBtn = targetUserId === 'all' ? 
                     document.getElementById('talkToAllBtn') : 
                     document.getElementById('talk-btn-' + targetUserId);
-                if (talkBtn) talkBtn.classList.add('talking');
+                if (talkBtn) {
+                    talkBtn.classList.add('talking');
+                    talkBtn.textContent = targetUserId === 'all' ? 'Stop Talking to All' : 'Stop Talking';
+                }
 
-                // Start capturing and streaming audio
+                // Start audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -1024,13 +1297,16 @@ app.get('/admin', (req, res) => {
             }
 
             stopTalking() {
-                if (!this.isTalking) return;
-                
                 console.log('Stop talking');
                 this.isTalking = false;
                 
                 document.querySelectorAll('.talk-btn').forEach(btn => {
                     btn.classList.remove('talking');
+                    if (btn.id === 'talkToAllBtn') {
+                        btn.textContent = 'Talk to All Users';
+                    } else if (btn.id.startsWith('talk-btn-')) {
+                        btn.textContent = 'Talk';
+                    }
                 });
 
                 // Stop audio streaming
@@ -1049,40 +1325,36 @@ app.get('/admin', (req, res) => {
                                 echoCancellation: true,
                                 noiseSuppression: true,
                                 autoGainControl: true,
-                                channelCount: 1
+                                channelCount: 1,
+                                sampleRate: 16000
                             } 
                         });
                     }
 
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
+                    // Use MediaRecorder for better audio quality
+                    this.mediaRecorder = new MediaRecorder(this.localStream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
 
-                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking) {
-                            const inputBuffer = audioProcessingEvent.inputBuffer;
-                            const inputData = inputBuffer.getChannelData(0);
+                    let audioChunks = [];
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
                             
-                            // Convert Float32Array to Int16Array for smaller data size
-                            const int16Data = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
-                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-                            }
-                            
-                            // Send audio data via socket
-                            this.socket.emit('audio-data', {
-                                roomCode: this.roomCode,
-                                audioData: Array.from(int16Data),
-                                sampleRate: this.audioContext.sampleRate
-                            });
+                            // Convert to base64 and send
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                this.socket.emit('audio-stream', {
+                                    roomCode: this.roomCode,
+                                    audioData: reader.result
+                                });
+                            };
+                            reader.readAsDataURL(event.data);
                         }
                     };
 
-                    this.mediaStreamSource.connect(this.scriptProcessor);
-                    this.scriptProcessor.connect(this.audioContext.destination);
+                    this.mediaRecorder.start(100); // Collect data every 100ms
                     
                     console.log('Audio streaming started');
                 } catch (error) {
@@ -1092,38 +1364,29 @@ app.get('/admin', (req, res) => {
             }
 
             stopAudioStreaming() {
-                if (this.scriptProcessor) {
-                    this.scriptProcessor.disconnect();
-                    this.scriptProcessor = null;
-                }
-                if (this.mediaStreamSource) {
-                    this.mediaStreamSource.disconnect();
-                    this.mediaStreamSource = null;
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.mediaRecorder.stop();
                 }
                 console.log('Audio streaming stopped');
             }
 
             playAudio(audioData) {
                 try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
-
-                    const int16Data = new Int16Array(audioData);
-                    const float32Data = new Float32Array(int16Data.length);
+                    // Convert base64 to blob
+                    const byteString = atob(audioData.split(',')[1]);
+                    const mimeString = audioData.split(',')[0].split(':')[1].split(';')[0];
+                    const ab = new ArrayBuffer(byteString.length);
+                    const ia = new Uint8Array(ab);
                     
-                    // Convert Int16Array back to Float32Array
-                    for (let i = 0; i < int16Data.length; i++) {
-                        float32Data[i] = int16Data[i] / 32768;
+                    for (let i = 0; i < byteString.length; i++) {
+                        ia[i] = byteString.charCodeAt(i);
                     }
-
-                    const audioBuffer = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
-                    audioBuffer.getChannelData(0).set(float32Data);
-
-                    const source = this.audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(this.audioContext.destination);
-                    source.start();
+                    
+                    const blob = new Blob([ab], { type: mimeString });
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    const audio = new Audio(audioUrl);
+                    audio.play().catch(e => console.log('Audio play failed:', e));
                     
                     console.log('Playing received audio');
                 } catch (error) {
@@ -1134,27 +1397,24 @@ app.get('/admin', (req, res) => {
             addUserToUI(userId, userName) {
                 const usersList = document.getElementById('usersList');
 
-                const userCard = document.createElement('div');
-                userCard.className = 'user-card';
-                userCard.id = 'user-' + userId;
-                userCard.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
+                const userCircle = document.createElement('div');
+                userCircle.className = 'user-circle';
+                userCircle.id = 'user-' + userId;
+                userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
-                    '<button class="individual-talk-btn" id="talk-btn-' + userId + '">Talk</button>' +
-                    '<button class="block-btn" onclick="app.blockUser(\\'' + userName + '\\')">Block</button>';
+                    '<div class="user-status online"></div>' +
+                    '<div class="user-controls">' +
+                    '<button class="talk-user-btn" id="talk-btn-' + userId + '">Talk</button>' +
+                    '<button class="block-btn" id="block-btn-' + userName + '">Block</button>' +
+                    '</div>';
 
-                usersList.appendChild(userCard);
+                usersList.appendChild(userCircle);
 
                 const talkBtn = document.getElementById('talk-btn-' + userId);
-                talkBtn.addEventListener('mousedown', () => this.startTalking(userId));
-                talkBtn.addEventListener('mouseup', () => this.stopTalking());
-                talkBtn.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startTalking(userId);
-                });
-                talkBtn.addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopTalking();
-                });
+                talkBtn.addEventListener('click', () => this.toggleTalking(userId));
+
+                const blockBtn = document.getElementById('block-btn-' + userName);
+                blockBtn.addEventListener('click', () => this.toggleBlockUser(userName));
             }
 
             removeUserFromUI(userId) {
@@ -1173,30 +1433,44 @@ app.get('/admin', (req, res) => {
             }
 
             updateTalkingIndicator(userId, targetUserId, isTalking) {
-                const userCard = document.getElementById('user-' + userId);
-                if (userCard) {
+                const userCircle = document.getElementById('user-' + userId);
+                if (userCircle) {
+                    // User is talking (green)
                     if (isTalking && userId !== this.socket.id) {
-                        userCard.classList.add('talking');
+                        userCircle.classList.add('talking');
                     } else {
-                        userCard.classList.remove('talking');
+                        userCircle.classList.remove('talking');
                     }
                     
-                    // Make user glow when admin is talking to them
+                    // Admin is talking to this user (red)
                     if (isTalking && targetUserId === userId) {
-                        userCard.classList.add('receiving');
+                        userCircle.classList.add('receiving');
                     } else {
-                        userCard.classList.remove('receiving');
+                        userCircle.classList.remove('receiving');
                     }
                 }
             }
 
-            blockUser(userName) {
+            toggleBlockUser(userName) {
                 if (this.roomCode) {
-                    console.log('Blocking user:', userName);
-                    this.socket.emit('block-user', {
+                    console.log('Toggling block for user:', userName);
+                    this.socket.emit('toggle-block-user', {
                         roomCode: this.roomCode,
                         userName: userName
                     });
+                }
+            }
+
+            updateBlockButton(userName, isBlocked) {
+                const blockBtn = document.getElementById('block-btn-' + userName);
+                if (blockBtn) {
+                    if (isBlocked) {
+                        blockBtn.textContent = 'Unblock';
+                        blockBtn.classList.add('blocked');
+                    } else {
+                        blockBtn.textContent = 'Block';
+                        blockBtn.classList.remove('blocked');
+                    }
                 }
             }
 
@@ -1211,7 +1485,7 @@ app.get('/admin', (req, res) => {
                     successElement.classList.remove('hidden');
                     setTimeout(() => {
                         successElement.classList.add('hidden');
-                    }, 5000);
+                    }, 3000);
                 }
             }
 
@@ -1351,39 +1625,50 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Audio data streaming
-  socket.on('audio-data', (data) => {
-    const { roomCode, audioData, sampleRate } = data;
-    console.log('Received audio data for room:', roomCode, 'data length:', audioData.length);
+  // Audio streaming
+  socket.on('audio-stream', (data) => {
+    const { roomCode, audioData } = data;
+    console.log('Received audio data for room:', roomCode);
 
     const room = rooms.get(roomCode);
     if (room) {
       // Broadcast audio to all users in the room except sender
-      socket.to(roomCode).emit('audio-data', {
-        audioData: audioData,
-        sampleRate: sampleRate
+      socket.to(roomCode).emit('audio-stream', {
+        audioData: audioData
       });
     }
   });
 
-  // Block user
-  socket.on('block-user', (data) => {
+  // Toggle block user
+  socket.on('toggle-block-user', (data) => {
     const { roomCode, userName } = data;
-    console.log('Block user request:', userName, 'in room:', roomCode);
+    console.log('Toggle block user request:', userName, 'in room:', roomCode);
     
     const room = rooms.get(roomCode);
     
     if (room && socket.id === room.admin) {
-      room.blockedUsers.add(userName);
-      
-      const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
-      if (userEntry) {
-        const [userId, user] = userEntry;
-        console.log('Disconnecting blocked user:', userName);
+      if (room.blockedUsers.has(userName)) {
+        // Unblock user
+        room.blockedUsers.delete(userName);
+        socket.emit('user-unblocked', { userName: userName });
+        console.log('User unblocked:', userName);
+      } else {
+        // Block user
+        room.blockedUsers.add(userName);
         
-        io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
-        room.users.delete(userId);
-        socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
+        // Find and disconnect blocked user
+        const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
+        if (userEntry) {
+          const [userId, user] = userEntry;
+          console.log('Disconnecting blocked user:', userName);
+          
+          io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
+          room.users.delete(userId);
+          socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
+        }
+        
+        socket.emit('user-blocked', { userName: userName });
+        console.log('User blocked:', userName);
       }
     }
   });
