@@ -422,8 +422,8 @@ app.get('/', (req, res) => {
                             noiseSuppression: true,
                             autoGainControl: true,
                             channelCount: 1,
-                            sampleRate: 48000, // Higher sample rate for better quality
-                            latency: 0.01 // Low latency
+                            sampleRate: 48000,
+                            latency: 0.01
                         } 
                     });
                     
@@ -553,7 +553,6 @@ app.get('/', (req, res) => {
                     document.getElementById('userStatus').classList.add('active');
                 }
 
-                // Start high-quality audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -572,7 +571,6 @@ app.get('/', (req, res) => {
                     document.getElementById('userStatus').classList.remove('active');
                 }
 
-                // Stop audio streaming
                 this.stopAudioStreaming();
 
                 this.socket.emit('stop-talking', {
@@ -610,13 +608,11 @@ app.get('/', (req, res) => {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
-                            // Convert to Int16Array for efficient transmission
                             const int16Data = new Int16Array(inputData.length);
                             for (let i = 0; i < inputData.length; i++) {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
-                            // Send raw audio buffer with compression
                             this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
@@ -659,7 +655,6 @@ app.get('/', (req, res) => {
                     const int16Data = new Int16Array(audioBuffer);
                     const float32Data = new Float32Array(int16Data.length);
                     
-                    // Convert back to Float32Array for playback
                     for (let i = 0; i < int16Data.length; i++) {
                         float32Data[i] = int16Data[i] / 32768;
                     }
@@ -692,7 +687,6 @@ app.get('/', (req, res) => {
 
                 usersList.appendChild(userCircle);
 
-                // Click on avatar to talk to user
                 userCircle.addEventListener('click', (e) => {
                     if (!e.target.classList.contains('block-btn') && userCircle.classList.contains('connected')) {
                         this.toggleTalking(userId);
@@ -739,14 +733,12 @@ app.get('/', (req, res) => {
                 if (this.isAdmin) {
                     const userCircle = document.getElementById('user-' + userId);
                     if (userCircle) {
-                        // User is talking (green)
                         if (isTalking && userId !== this.socket.id) {
                             userCircle.classList.add('talking');
                         } else {
                             userCircle.classList.remove('talking');
                         }
                         
-                        // Admin is talking to this user (red glow)
                         if (isTalking && targetUserId === userId) {
                             userCircle.classList.add('receiving');
                         } else {
@@ -1245,7 +1237,6 @@ app.get('/admin', (req, res) => {
                     return;
                 }
                 
-                // Check if user is connected
                 if (!this.userConnections.get(targetUserId)) {
                     this.showError('User is not connected');
                     return;
@@ -1266,13 +1257,11 @@ app.get('/admin', (req, res) => {
                 this.isTalking = true;
                 this.currentTalkingTo = targetUserId;
 
-                // Update UI to show active transmission
                 const userCircle = document.getElementById('user-' + targetUserId);
                 if (userCircle) {
                     userCircle.classList.add('receiving');
                 }
 
-                // Start high-quality audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -1285,7 +1274,6 @@ app.get('/admin', (req, res) => {
                 console.log('Stop talking');
                 this.isTalking = false;
                 
-                // Remove red glow from user
                 if (this.currentTalkingTo) {
                     const userCircle = document.getElementById('user-' + this.currentTalkingTo);
                     if (userCircle) {
@@ -1295,7 +1283,6 @@ app.get('/admin', (req, res) => {
                 
                 this.currentTalkingTo = null;
 
-                // Stop audio streaming
                 this.stopAudioStreaming();
 
                 this.socket.emit('stop-talking', {
@@ -1333,13 +1320,11 @@ app.get('/admin', (req, res) => {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
-                            // Convert to Int16Array for efficient transmission
                             const int16Data = new Int16Array(inputData.length);
                             for (let i = 0; i < inputData.length; i++) {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
-                            // Send raw audio buffer with compression
                             this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
@@ -1382,7 +1367,6 @@ app.get('/admin', (req, res) => {
                     const int16Data = new Int16Array(audioBuffer);
                     const float32Data = new Float32Array(int16Data.length);
                     
-                    // Convert back to Float32Array for playback
                     for (let i = 0; i < int16Data.length; i++) {
                         float32Data[i] = int16Data[i] / 32768;
                     }
@@ -1413,7 +1397,6 @@ app.get('/admin', (req, res) => {
 
                 usersList.appendChild(userCircle);
 
-                // Click on avatar to talk to user
                 userCircle.addEventListener('click', (e) => {
                     if (!e.target.classList.contains('block-btn') && userCircle.classList.contains('connected')) {
                         this.toggleTalking(userId);
@@ -1455,7 +1438,6 @@ app.get('/admin', (req, res) => {
             updateTalkingIndicator(userId, targetUserId, isTalking) {
                 const userCircle = document.getElementById('user-' + userId);
                 if (userCircle) {
-                    // User is talking (green)
                     if (isTalking && userId !== this.socket.id) {
                         userCircle.classList.add('talking');
                     } else {
@@ -1532,7 +1514,6 @@ io.on('connection', (socket) => {
 
     const room = rooms.get(roomCode);
     if (room) {
-      // Update user's socket ID
       const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
       if (userEntry) {
         const [oldId, user] = userEntry;
@@ -1543,7 +1524,6 @@ io.on('connection', (socket) => {
         socket.join(roomCode);
         console.log('User reconnected:', userName, 'to room:', roomCode);
         
-        // Notify admin about reconnection
         socket.to(room.admin).emit('user-reconnected', {
           userId: socket.id,
           userName: userName
@@ -1565,325 +1545,161 @@ io.on('connection', (socket) => {
     
     socket.join(roomCode);
     console.log('Room created:', roomCode, 'by admin:', socket.id);
-    socket socket.emit('room-created',.emit('room-created', { { roomCode });
-  });
-
- roomCode });
+    socket.emit('room-created', { roomCode });
   });
 
   // User joins room
-  socket.on('join-room', (  // User joins room
-  socket.on('join-room', (data) =>data) => {
-    const {
-    const { room { roomCode, userName }Code, userName } = data;
-    console.log('Join room attempt = data;
-    console.log('Join room attempt:', roomCode, 'by:', roomCode, 'by user:', userName);
+  socket.on('join-room', (data) => {
+    const { roomCode, userName } = data;
+    console.log('Join room attempt:', roomCode, 'by user:', userName);
 
     const room = rooms.get(roomCode);
 
-    if (!room) user:', userName);
-
-    const room = rooms.get(roomCode);
-
-    if (!room {
+    if (!room) {
       console.log('Room not found:', roomCode);
-     ) {
-      console.log('Room not found:', roomCode);
-      socket.emit('error', { message: 'Room not socket.emit('error', { message: 'Room not found. Please check the room code.' });
-      found. Please check the room code.' });
-      return return;
-    }
-
-    if (room.blocked;
+      socket.emit('error', { message: 'Room not found. Please check the room code.' });
+      return;
     }
 
     if (room.blockedUsers.has(userName)) {
-     Users.has(userName)) {
- console.log('      console.log('User blockedUser blocked from room:', userName from room:', userName);
-      socket);
-      socket.emit('error', { message: 'You are.emit('error', { message: 'You are blocked from this room blocked from this room' });
-      return;
-' });
+      console.log('User blocked from room:', userName);
+      socket.emit('error', { message: 'You are blocked from this room' });
       return;
     }
 
-       }
-
-    const existingUser = const existingUser = Array.from Array.from(room.users.values(room.users.values()).find()).find(user => user.name(user => user.name === userName);
- === userName);
-    if (existing    if (existingUser)User) {
-      console.log(' {
-      console.log('User nameUser name already exists:', userName already exists:', userName);
-     );
-      socket.emit(' socket.emit('error',error', { message { message: ': 'UserUser name already exists in this room name already exists in this room. Please choose. Please choose a different name.' });
+    const existingUser = Array.from(room.users.values()).find(user => user.name === userName);
+    if (existingUser) {
+      console.log('User name already exists:', userName);
+      socket.emit('error', { message: 'User name already exists in this room. Please choose a different name.' });
       return;
     }
 
- a different name.' });
-      return;
-    }
-
-    room.users.set(socket.id,    room.users.set(socket.id, {
-      id: {
+    room.users.set(socket.id, {
       id: socket.id,
-      name: socket.id,
-      name: userName userName,
-      isTalking: false,
+      name: userName,
       isTalking: false
     });
 
-    socket.join
-    });
-
     socket.join(roomCode);
-    console(roomCode);
-    console.log('.log('User joined roomUser joined room:',:', userName, 'to room:', roomCode userName, 'to room:', roomCode);
-    socket.emit(');
-    socket.emit('room-joined', { roomroom-joined', { roomCode, userName });
+    console.log('User joined room:', userName, 'to room:', roomCode);
+    socket.emit('room-joined', { roomCode, userName });
     
-   Code, userName });
-    
-    socket.to socket.to(room.admin).emit(room.admin).emit('('user-joined', {
-     user-joined', {
+    socket.to(room.admin).emit('user-joined', {
       userId: socket.id,
-      userId: socket.id,
-      userName userName: userName
+      userName: userName
     });
 
-   : userName
-    });
-
-    const const users = Array.from users = Array.from((room.users.values());
-   room.users.values());
-    socket.to(room.admin socket.to(room.admin).).emit('users-update',emit('users-update', users users);
-  });
-
-  // Start talking);
+    const users = Array.from(room.users.values());
+    socket.to(room.admin).emit('users-update', users);
   });
 
   // Start talking
-  socket.on
-  socket.on('('start-talking', (datastart-talking', (data) => {
-) => {
-    const { target    const { targetUserId,UserId, roomCode } = roomCode } = data;
- data;
-    console.log('    console.log('Start talkingStart talking in room:', roomCode, in room:', roomCode, 'from:', socket.id, 'from:', socket.id, ' 'to:', targetUserId);
+  socket.on('start-talking', (data) => {
+    const { targetUserId, roomCode } = data;
+    console.log('Start talking in room:', roomCode, 'from:', socket.id, 'to:', targetUserId);
 
-to:', targetUserId);
-
-    const    const room = rooms.get room = rooms.get(room(roomCode);
+    const room = rooms.get(roomCode);
     
-   Code);
-    
-    if (! if (!room) {
-     room) {
-      console.log console.log('Room not found for talking:', roomCode('Room not found for);
+    if (!room) {
+      console.log('Room not found for talking:', roomCode);
       return;
     }
 
     const speaker = room.users.get(socket.id) || 
-                   (socket.id talking:', roomCode);
-      return;
-    }
-
-    const speaker = room.users.get(socket.id) || 
-                   (socket.id === room.admin ? { id: socket.id === room.admin ? { id: socket.id, name:, name: 'Admin', is 'Admin', isTalkingTalking: true }: true } : null);
- : null);
+                   (socket.id === room.admin ? { id: socket.id, name: 'Admin', isTalking: true } : null);
     
-    if (    
     if (speaker) {
-speaker) {
-      speaker      speaker.isTalking = true.isTalking = true;
+      speaker.isTalking = true;
 
-      console.log(';
+      console.log('User started talking:', speaker.name, 'to:', targetUserId);
 
-      console.log('User started talking:',User started talking:', speaker.name speaker.name, 'to:', targetUserId);
-
-      // Not, 'to:', targetUserId);
-
-      // Notify all inify all in room about room about who is talking who is talking to to whom
- whom
-      io.to      io.to(roomCode).emit('user-t(roomCode).emit('user-talking', {
-alking', {
+      io.to(roomCode).emit('user-talking', {
         userId: socket.id,
-        target        userId: socket.id,
         targetUserId: targetUserId,
-        isUserId: targetUserId,
-        isTalkingTalking: true
-     : true
+        isTalking: true
       });
     }
   });
-    }
-  });
 
-  });
-
-  // Stop talking // Stop talking
-  socket.on('stop
-  socket.on('stop-talking', (data-talking', (data) => {
-    const {) => {
+  // Stop talking
+  socket.on('stop-talking', (data) => {
     const { roomCode } = data;
- roomCode } = data;
-    console.log('Stop talking    console.log('Stop talking in room:', room in room:', roomCode);
+    console.log('Stop talking in room:', roomCode);
 
-Code);
-
-    const room =    const room = rooms.get( rooms.get(roomCode);
-roomCode);
+    const room = rooms.get(roomCode);
     
-    if (    
-    if (room)room) {
-      const speaker {
-      const speaker = room = room.users.get(socket.users.get(socket.id) ||.id) || 
- 
-                     (socket.id === room                     (socket.id === room.admin ?.admin ? { id: socket { id: socket.id,.id, name: 'Admin' } name: 'Admin' } : null);
+    if (room) {
+      const speaker = room.users.get(socket.id) || 
+                     (socket.id === room.admin ? { id: socket.id, name: 'Admin' } : null);
       
- : null);
-      
-      if (spe      if (speaker)aker) {
-        speaker.is {
-        speaker.isTalking =Talking = false;
+      if (speaker) {
+        speaker.isTalking = false;
 
-        false;
-
-        // Notify all // to stop talking indicators
-        Notify all to stop talking indicators
-        io io.to(roomCode)..to(roomCode).emit('emit('user-talking',user-talking', {
-          {
+        io.to(roomCode).emit('user-talking', {
           userId: socket.id,
- userId: socket.id,
-                   isTalking: false
- isTalking: false
-        });
-      }
-    }
+          isTalking: false
         });
       }
     }
   });
 
-  //  });
-
-  // Real-time audio Real-time audio data streaming
-  socket data streaming
-  socket.on.on('audio-data', (('audio-data', (data) => {
-    const { roomdata) => {
-    const { roomCode, audioBufferCode, audioBuffer, sampleRate } = data;
+  // Real-time audio data streaming
+  socket.on('audio-data', (data) => {
+    const { roomCode, audioBuffer, sampleRate } = data;
     
-, sampleRate } = data;
-    
-       const room = rooms.get const room = rooms.get(room(roomCode);
-    if (Code);
-    if (roomroom) {
-      // Broadcast audio) {
-      // Broadcast audio to all users in the room to all users in the room except sender
-      socket.to except sender
-      socket.to(room(roomCode).volatile.Code).volatile.emit('audio-data', {
-emit('audio-data', {
-               audioBuffer: audioBuffer audioBuffer: audioBuffer,
-,
-        sampleRate: sample        sampleRate: sampleRate
-Rate
+    const room = rooms.get(roomCode);
+    if (room) {
+      socket.to(roomCode).volatile.emit('audio-data', {
+        audioBuffer: audioBuffer,
+        sampleRate: sampleRate
       });
     }
-       });
-    }
   });
 
- });
-
-  // Toggle block  // Toggle block user user
-  socket.on('toggle
-  socket.on('toggle-block-user', (data-block-user', (data) =>) => {
-    const { room {
-    const { roomCode,Code, userName userName } = } = data;
-    console.log('Toggle block user data;
-    console.log('Toggle block user request request:', userName, 'in room:', roomCode);
+  // Toggle block user
+  socket.on('toggle-block-user', (data) => {
+    const { roomCode, userName } = data;
+    console.log('Toggle block user request:', userName, 'in room:', roomCode);
     
-:', userName, 'in room:', roomCode);
-    
-    const room = rooms.get    const room = rooms.get(roomCode);
-    
-   (roomCode);
+    const room = rooms.get(roomCode);
     
     if (room && socket.id === room.admin) {
-      if (room.blockedUsers.has(user if (room && socket.id === room.admin) {
       if (room.blockedUsers.has(userName)) {
-       Name)) {
         // Unblock user
         room.blockedUsers.delete(userName);
         socket.emit('user-unblocked', { userName: userName });
-        console.log('User unblock // Unblock user
-        room.blockedUsers.delete(userName);
-        socket.emit('user-unblocked', { userName: userName });
-        console.log('User unblockeded:', userName);
-      } else {
-        //:', userName);
+        console.log('User unblocked:', userName);
       } else {
         // Block user
-        room Block user
-        room.block.blockedUsers.add(userName);
+        room.blockedUsers.add(userName);
         
-edUsers.add(userName);
-        
-        // Find and disconnect blocked user        // Find and disconnect blocked user
-        const userEntry =
-        const userEntry = Array.from(room.users. Array.from(room.users.entriesentries()).find(([id,()).find(([id, user user]) => user.name === userName]) => user.name === userName);
-       );
+        // Find and disconnect blocked user
+        const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
         if (userEntry) {
-          const [ if (userEntry) {
-          const [userId, user] = useruserId, user] = userEntryEntry;
-          console.log;
-          console.log('('Disconnecting blocked user:', userName);
+          const [userId, user] = userEntry;
+          console.log('Disconnecting blocked user:', userName);
           
-Disconnecting blocked user:', userName);
-          
-                   io.to(userId). io.to(userId).emitemit('blocked', { message('blocked', { message:: 'You have been blocked 'You have been blocked by admin by admin' });
-          room' });
-          room.users.delete.users.delete(userId);
-         (userId);
-          socket.to socket.to(room.admin).(room.admin).emit('emit('users-update', Array.fromusers-update', Array.from((room.users.values()));
-       room.users.values()));
+          io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
+          room.users.delete(userId);
+          socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
         }
- }
         
-        socket.emit        
-        socket.emit('user('user-blocked', {-blocked', { userName: userName: userName });
-        console.log('User blocked userName });
+        socket.emit('user-blocked', { userName: userName });
         console.log('User blocked:', userName);
-     :', userName);
       }
     }
   });
 
-  }
-    }
-  });
-
-  // Dis // Disconnection handlingconnection handling
-  socket
-  socket.on('disconnect',.on('disconnect', (reason (reason) => {
-   ) => {
-    console.log('User console.log('User disconnected disconnected:', socket.id, ':', socket.id, 'Reason:',Reason:', reason);
+  // Disconnection handling
+  socket.on('disconnect', (reason) => {
+    console.log('User disconnected:', socket.id, 'Reason:', reason);
     
-    reason);
-    
-    for (const [roomCode, room] of for (const [roomCode, room] of rooms.entries()) {
-      rooms.entries()) {
-      if (room.admin === socket if (room.admin === socket.id).id {
+    for (const [roomCode, room] of rooms.entries()) {
+      if (room.admin === socket.id) {
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
         break;
-      }) {
-        console.log('Admin disconnected, closing room:', roomCode);
-        io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
-        rooms.delete(roomCode);
- else if (room.users.has(socket.id)) {
-        const user = room.users.get(socket.id);
-        room.users.delete(socket.id);
-        console.log('User disconnected:', user.name        break;
       } else if (room.users.has(socket.id)) {
         const user = room.users.get(socket.id);
         room.users.delete(socket.id);
@@ -1894,17 +1710,8 @@ Disconnecting blocked user:', userName);
           userName: user.name
         });
         
-        const users = Array.from(, 'from room:', roomCode);
-        
-        socket.to(room.admin).emit('user-left', {
-          userId: socket.id,
-          userName: user.name
-        });
-        
         const users = Array.from(room.users.values());
-        socket.to(room.admin).emit('usersroom.users.values());
         socket.to(room.admin).emit('users-update', users);
-       -update', users);
         break;
       }
     }
@@ -1913,16 +1720,7 @@ Disconnecting blocked user:', userName);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log('Server running on port', break;
-      }
-    }
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
   console.log('Server running on port', PORT);
- PORT);
   console.log('User Page: http://localhost:' + PORT + '/');
   console.log('Admin Page: http://localhost:' + PORT + '/admin');
 });
