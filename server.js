@@ -215,7 +215,7 @@ app.get('/', (req, res) => {
                 <span>Microphone Ready</span>
             </div>
             
-            <button id="talkBtn" class="talk-btn" disabled>Click to Talk</button>
+            <button id="talkBtn" class="talk-btn">Click to Talk</button>
             <div class="status-indicators">
                 <div class="status-item">
                     <div class="status-dot" id="userStatus"></div>
@@ -242,7 +242,8 @@ app.get('/', (req, res) => {
                 this.isTalking = false;
                 this.localStream = null;
                 this.audioContext = null;
-                this.mediaRecorder = null;
+                this.mediaStreamSource = null;
+                this.scriptProcessor = null;
                 this.reconnectAttempts = 0;
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
@@ -396,14 +397,10 @@ app.get('/', (req, res) => {
 
             enableButtons() {
                 document.getElementById('joinRoomBtn').disabled = false;
-                if (this.roomCode) {
-                    document.getElementById('talkBtn').disabled = false;
-                }
             }
 
             disableButtons() {
                 document.getElementById('joinRoomBtn').disabled = true;
-                document.getElementById('talkBtn').disabled = true;
             }
 
             checkPageType() {
@@ -417,9 +414,6 @@ app.get('/', (req, res) => {
 
             initAdmin() {
                 document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                document.getElementById('talkToAllBtn').addEventListener('click', () => this.toggleTalking('all'));
-                
-                // Test microphone for admin too
                 this.testMicrophoneAccess();
             }
 
@@ -464,7 +458,6 @@ app.get('/', (req, res) => {
                     document.getElementById('roomCode').textContent = data.roomCode;
                     this.saveToLocalStorage();
                     this.showSuccess('Room created with code: ' + data.roomCode);
-                    document.getElementById('talkToAllBtn').disabled = false;
                 });
 
                 this.socket.on('room-joined', (data) => {
@@ -476,7 +469,6 @@ app.get('/', (req, res) => {
                     document.getElementById('joinSection').classList.add('hidden');
                     document.getElementById('chatSection').classList.remove('hidden');
                     this.saveToLocalStorage();
-                    document.getElementById('talkBtn').disabled = false;
                     this.showSuccess('Successfully joined room: ' + data.roomCode);
                 });
 
@@ -496,8 +488,8 @@ app.get('/', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
                 });
 
-                this.socket.on('audio-stream', (data) => {
-                    this.playAudio(data.audioData);
+                this.socket.on('audio-data', (data) => {
+                    this.playAudio(data.audioBuffer);
                 });
 
                 this.socket.on('user-left', (data) => {
@@ -566,20 +558,14 @@ app.get('/', (req, res) => {
                 this.isTalking = true;
                 
                 if (this.isAdmin) {
-                    const talkBtn = targetUserId === 'all' ? 
-                        document.getElementById('talkToAllBtn') : 
-                        document.getElementById('talk-btn-' + targetUserId);
-                    if (talkBtn) {
-                        talkBtn.classList.add('talking');
-                        talkBtn.textContent = targetUserId === 'all' ? 'Stop Talking to All' : 'Stop Talking';
-                    }
+                    // For admin, targetUserId is handled by avatar click
                 } else {
                     document.getElementById('talkBtn').classList.add('talking');
                     document.getElementById('talkBtn').textContent = 'Stop Talking';
                     document.getElementById('userStatus').classList.add('active');
                 }
 
-                // Start audio streaming
+                // Start real-time audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -592,16 +578,7 @@ app.get('/', (req, res) => {
                 console.log('Stop talking');
                 this.isTalking = false;
                 
-                if (this.isAdmin) {
-                    document.querySelectorAll('.talk-btn').forEach(btn => {
-                        btn.classList.remove('talking');
-                        if (btn.id === 'talkToAllBtn') {
-                            btn.textContent = 'Talk to All Users';
-                        } else if (btn.id.startsWith('talk-btn-')) {
-                            btn.textContent = 'Talk';
-                        }
-                    });
-                } else {
+                if (!this.isAdmin) {
                     document.getElementById('talkBtn').classList.remove('talking');
                     document.getElementById('talkBtn').textContent = 'Click to Talk';
                     document.getElementById('userStatus').classList.remove('active');
@@ -629,32 +606,37 @@ app.get('/', (req, res) => {
                         });
                     }
 
-                    // Use MediaRecorder for better audio quality
-                    this.mediaRecorder = new MediaRecorder(this.localStream, {
-                        mimeType: 'audio/webm;codecs=opus'
-                    });
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
 
-                    let audioChunks = [];
-                    
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            audioChunks.push(event.data);
+                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
+
+                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                        if (this.isTalking) {
+                            const inputBuffer = audioProcessingEvent.inputBuffer;
+                            const inputData = inputBuffer.getChannelData(0);
                             
-                            // Convert to base64 and send
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                                this.socket.emit('audio-stream', {
-                                    roomCode: this.roomCode,
-                                    audioData: reader.result
-                                });
-                            };
-                            reader.readAsDataURL(event.data);
+                            // Convert to Int16Array for efficient transmission
+                            const int16Data = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                            }
+                            
+                            // Send raw audio buffer for minimal latency
+                            this.socket.emit('audio-data', {
+                                roomCode: this.roomCode,
+                                audioBuffer: int16Data.buffer,
+                                sampleRate: this.audioContext.sampleRate
+                            });
                         }
                     };
 
-                    this.mediaRecorder.start(100); // Collect data every 100ms
+                    this.mediaStreamSource.connect(this.scriptProcessor);
+                    this.scriptProcessor.connect(this.audioContext.destination);
                     
-                    console.log('Audio streaming started');
+                    console.log('Real-time audio streaming started');
                 } catch (error) {
                     console.error('Error starting audio streaming:', error);
                     this.showError('Could not access microphone. Please check permissions.');
@@ -662,29 +644,38 @@ app.get('/', (req, res) => {
             }
 
             stopAudioStreaming() {
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.mediaRecorder.stop();
+                if (this.scriptProcessor) {
+                    this.scriptProcessor.disconnect();
+                    this.scriptProcessor = null;
+                }
+                if (this.mediaStreamSource) {
+                    this.mediaStreamSource.disconnect();
+                    this.mediaStreamSource = null;
                 }
                 console.log('Audio streaming stopped');
             }
 
-            playAudio(audioData) {
+            playAudio(audioBuffer) {
                 try {
-                    // Convert base64 to blob
-                    const byteString = atob(audioData.split(',')[1]);
-                    const mimeString = audioData.split(',')[0].split(':')[1].split(';')[0];
-                    const ab = new ArrayBuffer(byteString.length);
-                    const ia = new Uint8Array(ab);
-                    
-                    for (let i = 0; i < byteString.length; i++) {
-                        ia[i] = byteString.charCodeAt(i);
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     }
+
+                    const int16Data = new Int16Array(audioBuffer);
+                    const float32Data = new Float32Array(int16Data.length);
                     
-                    const blob = new Blob([ab], { type: mimeString });
-                    const audioUrl = URL.createObjectURL(blob);
-                    
-                    const audio = new Audio(audioUrl);
-                    audio.play().catch(e => console.log('Audio play failed:', e));
+                    // Convert back to Float32Array for playback
+                    for (let i = 0; i < int16Data.length; i++) {
+                        float32Data[i] = int16Data[i] / 32768;
+                    }
+
+                    const audioBufferSource = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
+                    audioBufferSource.getChannelData(0).set(float32Data);
+
+                    const source = this.audioContext.createBufferSource();
+                    source.buffer = audioBufferSource;
+                    source.connect(this.audioContext.destination);
+                    source.start();
                     
                     console.log('Playing received audio');
                 } catch (error) {
@@ -703,13 +694,22 @@ app.get('/', (req, res) => {
                 userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
                     '<div class="user-status online"></div>' +
-                    '<button class="talk-user-btn" id="talk-btn-' + userId + '">Talk</button>' +
-                    '<button class="block-btn" onclick="app.toggleBlockUser(\\'' + userName + '\\')">Block</button>';
+                    '<button class="block-btn" id="block-btn-' + userName + '">Block</button>';
 
                 usersList.appendChild(userCircle);
 
-                const talkBtn = document.getElementById('talk-btn-' + userId);
-                talkBtn.addEventListener('click', () => this.toggleTalking(userId));
+                // Click on avatar to talk to user
+                userCircle.addEventListener('click', (e) => {
+                    if (!e.target.classList.contains('block-btn')) {
+                        this.toggleTalking(userId);
+                    }
+                });
+
+                const blockBtn = document.getElementById('block-btn-' + userName);
+                blockBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.toggleBlockUser(userName);
+                });
             }
 
             removeUserFromUI(userId) {
@@ -775,13 +775,11 @@ app.get('/', (req, res) => {
                 if (this.isAdmin) {
                     document.getElementById('roomCode').textContent = '----';
                     document.getElementById('usersList').innerHTML = '';
-                    document.getElementById('talkToAllBtn').disabled = true;
-                    document.getElementById('talkToAllBtn').textContent = 'Talk to All Users';
                 } else {
                     document.getElementById('joinSection').classList.remove('hidden');
                     document.getElementById('chatSection').classList.add('hidden');
-                    document.getElementById('talkBtn').disabled = true;
                     document.getElementById('talkBtn').textContent = 'Click to Talk';
+                    document.getElementById('talkBtn').classList.remove('talking');
                 }
                 this.roomCode = null;
                 this.userName = null;
@@ -937,6 +935,11 @@ app.get('/admin', (req, res) => {
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            cursor: pointer;
+        }
+        .user-circle:hover {
+            border-color: #3498db;
+            background: #e3f2fd;
         }
         .user-circle.talking { 
             border-color: #27ae60; 
@@ -982,19 +985,11 @@ app.get('/admin', (req, res) => {
             gap: 4px;
             margin-top: 4px;
         }
-        .talk-user-btn, .block-btn { 
+        .block-btn { 
             padding: 4px 8px; 
             font-size: 10px; 
             border-radius: 4px;
-        }
-        .talk-user-btn { 
-            background: #9b59b6; 
-        }
-        .talk-user-btn:hover {
-            background: #8e44ad;
-        }
-        .block-btn { 
-            background: #e74c3c; 
+            background: #e74c3c;
         }
         .block-btn:hover {
             background: #c0392b;
@@ -1048,15 +1043,8 @@ app.get('/admin', (req, res) => {
         </div>
 
         <div class="users-container">
-            <h2>Connected Users</h2>
+            <h2>Connected Users - Click on Avatar to Talk</h2>
             <div id="usersList" class="users-grid"></div>
-        </div>
-
-        <div class="controls">
-            <h2>Admin Controls</h2>
-            <div class="talk-controls">
-                <button id="talkToAllBtn" class="talk-btn" disabled>Talk to All Users</button>
-            </div>
         </div>
 
         <div class="error-message hidden" id="errorMessage"></div>
@@ -1072,8 +1060,11 @@ app.get('/admin', (req, res) => {
                 this.userName = 'Admin';
                 this.isAdmin = true;
                 this.isTalking = false;
+                this.currentTalkingTo = null;
                 this.localStream = null;
-                this.mediaRecorder = null;
+                this.audioContext = null;
+                this.mediaStreamSource = null;
+                this.scriptProcessor = null;
                 this.reconnectAttempts = 0;
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
@@ -1110,7 +1101,6 @@ app.get('/admin', (req, res) => {
                     console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     document.getElementById('createRoomBtn').disabled = true;
-                    document.getElementById('talkToAllBtn').disabled = true;
                     
                     if (reason === 'io server disconnect') {
                         this.socket.connect();
@@ -1199,8 +1189,6 @@ app.get('/admin', (req, res) => {
 
             initAdmin() {
                 document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                document.getElementById('talkToAllBtn').addEventListener('click', () => this.toggleTalking('all'));
-                
                 this.testMicrophoneAccess();
             }
 
@@ -1210,7 +1198,6 @@ app.get('/admin', (req, res) => {
                     this.roomCode = data.roomCode;
                     document.getElementById('roomCode').textContent = data.roomCode;
                     this.showSuccess('Room created with code: ' + data.roomCode);
-                    document.getElementById('talkToAllBtn').disabled = false;
                 });
 
                 this.socket.on('user-joined', (data) => {
@@ -1229,8 +1216,8 @@ app.get('/admin', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
                 });
 
-                this.socket.on('audio-stream', (data) => {
-                    this.playAudio(data.audioData);
+                this.socket.on('audio-data', (data) => {
+                    this.playAudio(data.audioBuffer);
                 });
 
                 this.socket.on('user-left', (data) => {
@@ -1268,9 +1255,12 @@ app.get('/admin', (req, res) => {
                     return;
                 }
                 
-                if (this.isTalking) {
+                if (this.isTalking && this.currentTalkingTo === targetUserId) {
                     this.stopTalking();
                 } else {
+                    if (this.isTalking) {
+                        this.stopTalking();
+                    }
                     this.startTalking(targetUserId);
                 }
             }
@@ -1278,16 +1268,9 @@ app.get('/admin', (req, res) => {
             async startTalking(targetUserId) {
                 console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
-                
-                const talkBtn = targetUserId === 'all' ? 
-                    document.getElementById('talkToAllBtn') : 
-                    document.getElementById('talk-btn-' + targetUserId);
-                if (talkBtn) {
-                    talkBtn.classList.add('talking');
-                    talkBtn.textContent = targetUserId === 'all' ? 'Stop Talking to All' : 'Stop Talking';
-                }
+                this.currentTalkingTo = targetUserId;
 
-                // Start audio streaming
+                // Start real-time audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -1299,15 +1282,7 @@ app.get('/admin', (req, res) => {
             stopTalking() {
                 console.log('Stop talking');
                 this.isTalking = false;
-                
-                document.querySelectorAll('.talk-btn').forEach(btn => {
-                    btn.classList.remove('talking');
-                    if (btn.id === 'talkToAllBtn') {
-                        btn.textContent = 'Talk to All Users';
-                    } else if (btn.id.startsWith('talk-btn-')) {
-                        btn.textContent = 'Talk';
-                    }
-                });
+                this.currentTalkingTo = null;
 
                 // Stop audio streaming
                 this.stopAudioStreaming();
@@ -1331,32 +1306,37 @@ app.get('/admin', (req, res) => {
                         });
                     }
 
-                    // Use MediaRecorder for better audio quality
-                    this.mediaRecorder = new MediaRecorder(this.localStream, {
-                        mimeType: 'audio/webm;codecs=opus'
-                    });
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
 
-                    let audioChunks = [];
-                    
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            audioChunks.push(event.data);
+                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
+
+                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                        if (this.isTalking) {
+                            const inputBuffer = audioProcessingEvent.inputBuffer;
+                            const inputData = inputBuffer.getChannelData(0);
                             
-                            // Convert to base64 and send
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                                this.socket.emit('audio-stream', {
-                                    roomCode: this.roomCode,
-                                    audioData: reader.result
-                                });
-                            };
-                            reader.readAsDataURL(event.data);
+                            // Convert to Int16Array for efficient transmission
+                            const int16Data = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                            }
+                            
+                            // Send raw audio buffer for minimal latency
+                            this.socket.emit('audio-data', {
+                                roomCode: this.roomCode,
+                                audioBuffer: int16Data.buffer,
+                                sampleRate: this.audioContext.sampleRate
+                            });
                         }
                     };
 
-                    this.mediaRecorder.start(100); // Collect data every 100ms
+                    this.mediaStreamSource.connect(this.scriptProcessor);
+                    this.scriptProcessor.connect(this.audioContext.destination);
                     
-                    console.log('Audio streaming started');
+                    console.log('Real-time audio streaming started');
                 } catch (error) {
                     console.error('Error starting audio streaming:', error);
                     this.showError('Could not access microphone. Please check permissions.');
@@ -1364,29 +1344,38 @@ app.get('/admin', (req, res) => {
             }
 
             stopAudioStreaming() {
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.mediaRecorder.stop();
+                if (this.scriptProcessor) {
+                    this.scriptProcessor.disconnect();
+                    this.scriptProcessor = null;
+                }
+                if (this.mediaStreamSource) {
+                    this.mediaStreamSource.disconnect();
+                    this.mediaStreamSource = null;
                 }
                 console.log('Audio streaming stopped');
             }
 
-            playAudio(audioData) {
+            playAudio(audioBuffer) {
                 try {
-                    // Convert base64 to blob
-                    const byteString = atob(audioData.split(',')[1]);
-                    const mimeString = audioData.split(',')[0].split(':')[1].split(';')[0];
-                    const ab = new ArrayBuffer(byteString.length);
-                    const ia = new Uint8Array(ab);
-                    
-                    for (let i = 0; i < byteString.length; i++) {
-                        ia[i] = byteString.charCodeAt(i);
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     }
+
+                    const int16Data = new Int16Array(audioBuffer);
+                    const float32Data = new Float32Array(int16Data.length);
                     
-                    const blob = new Blob([ab], { type: mimeString });
-                    const audioUrl = URL.createObjectURL(blob);
-                    
-                    const audio = new Audio(audioUrl);
-                    audio.play().catch(e => console.log('Audio play failed:', e));
+                    // Convert back to Float32Array for playback
+                    for (let i = 0; i < int16Data.length; i++) {
+                        float32Data[i] = int16Data[i] / 32768;
+                    }
+
+                    const audioBufferSource = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
+                    audioBufferSource.getChannelData(0).set(float32Data);
+
+                    const source = this.audioContext.createBufferSource();
+                    source.buffer = audioBufferSource;
+                    source.connect(this.audioContext.destination);
+                    source.start();
                     
                     console.log('Playing received audio');
                 } catch (error) {
@@ -1403,18 +1392,22 @@ app.get('/admin', (req, res) => {
                 userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
                     '<div class="user-status online"></div>' +
-                    '<div class="user-controls">' +
-                    '<button class="talk-user-btn" id="talk-btn-' + userId + '">Talk</button>' +
-                    '<button class="block-btn" id="block-btn-' + userName + '">Block</button>' +
-                    '</div>';
+                    '<button class="block-btn" id="block-btn-' + userName + '">Block</button>';
 
                 usersList.appendChild(userCircle);
 
-                const talkBtn = document.getElementById('talk-btn-' + userId);
-                talkBtn.addEventListener('click', () => this.toggleTalking(userId));
+                // Click on avatar to talk to user
+                userCircle.addEventListener('click', (e) => {
+                    if (!e.target.classList.contains('block-btn')) {
+                        this.toggleTalking(userId);
+                    }
+                });
 
                 const blockBtn = document.getElementById('block-btn-' + userName);
-                blockBtn.addEventListener('click', () => this.toggleBlockUser(userName));
+                blockBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.toggleBlockUser(userName);
+                });
             }
 
             removeUserFromUI(userId) {
@@ -1573,7 +1566,7 @@ io.on('connection', (socket) => {
     socket.to(room.admin).emit('users-update', users);
   });
 
-  // Start talking (push-to-talk)
+  // Start talking
   socket.on('start-talking', (data) => {
     const { targetUserId, roomCode } = data;
     console.log('Start talking in room:', roomCode, 'from:', socket.id, 'to:', targetUserId);
@@ -1625,16 +1618,17 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Audio streaming
-  socket.on('audio-stream', (data) => {
-    const { roomCode, audioData } = data;
-    console.log('Received audio data for room:', roomCode);
+  // Real-time audio data streaming
+  socket.on('audio-data', (data) => {
+    const { roomCode, audioBuffer, sampleRate } = data;
+    console.log('Received real-time audio data for room:', roomCode);
 
     const room = rooms.get(roomCode);
     if (room) {
       // Broadcast audio to all users in the room except sender
-      socket.to(roomCode).emit('audio-stream', {
-        audioData: audioData
+      socket.to(roomCode).emit('audio-data', {
+        audioBuffer: audioBuffer,
+        sampleRate: sampleRate
       });
     }
   });
