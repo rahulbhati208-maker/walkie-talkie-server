@@ -187,7 +187,7 @@ app.get('/', (req, res) => {
             }
 
             connectToServer() {
-                console.log('🔄 Connecting to server...');
+                console.log('Connecting to server...');
                 this.updateConnectionStatus('connecting');
                 
                 if (this.socket) {
@@ -195,18 +195,17 @@ app.get('/', (req, res) => {
                 }
 
                 this.socket = io({
-                    reconnection: false // We'll handle reconnection manually
+                    reconnection: false
                 });
                 
                 this.socket.on('connect', () => {
-                    console.log('✅ Connected to server');
+                    console.log('Connected to server');
                     this.reconnectAttempts = 0;
                     this.updateConnectionStatus('connected');
                     this.enableButtons();
                     
-                    // Rejoin room if we were in one
                     if (this.roomCode && this.userName) {
-                        console.log('🔄 Rejoining room...');
+                        console.log('Rejoining room...');
                         this.socket.emit('join-room', { 
                             roomCode: this.roomCode, 
                             userName: this.userName 
@@ -215,12 +214,11 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('disconnect', (reason) => {
-                    console.log('❌ Disconnected from server:', reason);
+                    console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     this.disableButtons();
                     
                     if (reason === 'io server disconnect') {
-                        // Server initiated disconnect, try to reconnect
                         this.socket.connect();
                     } else {
                         this.scheduleReconnect();
@@ -228,13 +226,13 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('connect_error', (error) => {
-                    console.log('❌ Connection error:', error);
+                    console.log('Connection error:', error);
                     this.updateConnectionStatus('error');
                     this.scheduleReconnect();
                 });
 
                 this.socket.on('reconnect_attempt', (attempt) => {
-                    console.log('🔄 Reconnection attempt:', attempt);
+                    console.log('Reconnection attempt:', attempt);
                     this.updateConnectionStatus('reconnecting');
                 });
 
@@ -245,25 +243,23 @@ app.get('/', (req, res) => {
                 if (this.reconnectAttempts < this.maxReconnectAttempts) {
                     this.reconnectAttempts++;
                     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-                    console.log(`🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+                    console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
                     
                     this.reconnectTimeout = setTimeout(() => {
                         this.connectToServer();
                     }, delay);
                 } else {
-                    console.log('❌ Max reconnection attempts reached');
+                    console.log('Max reconnection attempts reached');
                     this.showError('Unable to connect to server. Please refresh the page.');
                 }
             }
 
             setupAutoReconnect() {
-                // Auto-reconnect when browser comes online
                 window.addEventListener('online', () => {
-                    console.log('🌐 Browser is online, reconnecting...');
+                    console.log('Browser is online, reconnecting...');
                     this.connectToServer();
                 });
 
-                // Prevent multiple reconnection attempts
                 window.addEventListener('beforeunload', () => {
                     if (this.reconnectTimeout) {
                         clearTimeout(this.reconnectTimeout);
@@ -366,7 +362,6 @@ app.get('/', (req, res) => {
                     if (e.key === 'Enter') this.joinRoom();
                 });
 
-                // Test microphone access
                 this.testMicrophoneAccess();
             }
 
@@ -380,25 +375,22 @@ app.get('/', (req, res) => {
                         } 
                     });
                     
-                    // Create audio context for playback
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     
-                    // Update mic indicator
                     document.getElementById('micIndicator').classList.add('active');
                     
-                    // Stop the stream since we just wanted to test access
                     stream.getTracks().forEach(track => track.stop());
                     
-                    console.log('✅ Microphone access granted');
+                    console.log('Microphone access granted');
                 } catch (error) {
-                    console.error('❌ Microphone access denied:', error);
+                    console.error('Microphone access denied:', error);
                     this.showError('Microphone access is required. Please allow microphone permissions.');
                 }
             }
 
             setupSocketListeners() {
                 this.socket.on('room-created', (data) => {
-                    console.log('✅ Room created:', data.roomCode);
+                    console.log('Room created:', data.roomCode);
                     this.roomCode = data.roomCode;
                     document.getElementById('roomCode').textContent = data.roomCode;
                     this.saveToLocalStorage();
@@ -408,7 +400,7 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('room-joined', (data) => {
-                    console.log('✅ Room joined:', data.roomCode);
+                    console.log('Room joined:', data.roomCode);
                     this.roomCode = data.roomCode;
                     this.userName = data.userName;
                     document.getElementById('currentUserName').textContent = data.userName;
@@ -422,18 +414,18 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('user-joined', (data) => {
-                    console.log('👤 User joined:', data.userName);
+                    console.log('User joined:', data.userName);
                     this.addUserToUI(data.userId, data.userName);
                     this.showSuccess('User ' + data.userName + ' joined the room');
                 });
 
                 this.socket.on('users-update', (users) => {
-                    console.log('📊 Users updated:', users.length + ' users');
+                    console.log('Users updated:', users.length + ' users');
                     this.updateUsersList(users);
                 });
 
                 this.socket.on('user-talking', (data) => {
-                    console.log('🎤 User talking:', data.userId, 'isTalking:', data.isTalking);
+                    console.log('User talking:', data.userId, 'isTalking:', data.isTalking);
                     this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
                     if (data.recordingId) {
                         this.currentRecordingId = data.recordingId;
@@ -441,54 +433,52 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('audio-stream', (data) => {
-                    console.log('🔊 Receiving audio stream from:', data.from);
+                    console.log('Receiving audio stream from:', data.from);
                     this.playAudio(data.audioData);
                 });
 
                 this.socket.on('recording-started', (data) => {
-                    console.log('🔴 Recording started:', data.recordingId);
+                    console.log('Recording started:', data.recordingId);
                     this.currentRecordingId = data.recordingId;
                     this.startAudioRecording();
                 });
 
                 this.socket.on('recording-complete', (data) => {
-                    console.log('💾 Recording complete:', data.recordingId);
+                    console.log('Recording complete:', data.recordingId);
                     this.addRecordingToUI(data);
                     
-                    // Auto-download for users if not already downloaded
                     if (!this.isAdmin && !data.downloaded) {
                         this.downloadRecording(data.recordingId, data.audioBlob, true);
                     }
                 });
 
                 this.socket.on('user-left', (data) => {
-                    console.log('👤 User left:', data.userName);
+                    console.log('User left:', data.userName);
                     this.removeUserFromUI(data.userId);
                     this.showMessage('User ' + data.userName + ' left the room');
                 });
 
                 this.socket.on('blocked', (data) => {
-                    console.log('🚫 User blocked:', data.message);
+                    console.log('User blocked:', data.message);
                     this.showError(data.message);
                     this.leaveRoom();
                 });
 
                 this.socket.on('room-closed', (data) => {
-                    console.log('🚪 Room closed by admin');
-                    // Auto-download all recordings before leaving
+                    console.log('Room closed by admin');
                     this.downloadAllRecordings(true);
                     this.showError('Room has been closed by admin. Your recordings have been downloaded.');
                     this.leaveRoom();
                 });
 
                 this.socket.on('error', (data) => {
-                    console.log('❌ Error:', data.message);
+                    console.log('Error:', data.message);
                     this.showError(data.message);
                 });
             }
 
             createRoom() {
-                console.log('🔄 Creating room...');
+                console.log('Creating room...');
                 this.socket.emit('create-room');
             }
 
@@ -506,7 +496,7 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                console.log('🔄 Joining room:', roomCode, 'as:', userName);
+                console.log('Joining room:', roomCode, 'as:', userName);
                 this.userName = userName;
                 this.socket.emit('join-room', { roomCode, userName });
             }
@@ -517,7 +507,7 @@ app.get('/', (req, res) => {
                     return;
                 }
                 
-                console.log('🎤 Start talking to:', targetUserId);
+                console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
                 
                 if (this.isAdmin) {
@@ -539,7 +529,7 @@ app.get('/', (req, res) => {
             stopTalking() {
                 if (!this.isTalking) return;
                 
-                console.log('🔇 Stop talking');
+                console.log('Stop talking');
                 this.isTalking = false;
                 
                 if (this.isAdmin) {
@@ -553,7 +543,7 @@ app.get('/', (req, res) => {
 
                 this.stopAudioRecording().then(audioBlob => {
                     if (this.currentRecordingId && audioBlob) {
-                        console.log('💾 Sending recording:', this.currentRecordingId);
+                        console.log('Sending recording:', this.currentRecordingId);
                         this.socket.emit('stop-talking', {
                             recordingId: this.currentRecordingId,
                             audioBlob: this.blobToBase64(audioBlob)
@@ -597,15 +587,15 @@ app.get('/', (req, res) => {
                     source.connect(this.audioContext.destination);
                     source.start();
                     
-                    console.log('🔊 Playing audio');
+                    console.log('Playing audio');
                 } catch (error) {
-                    console.error('❌ Error playing audio:', error);
+                    console.error('Error playing audio:', error);
                 }
             }
 
             async startAudioRecording() {
                 try {
-                    console.log('🎙️ Starting audio recording...');
+                    console.log('Starting audio recording...');
                     const stream = await navigator.mediaDevices.getUserMedia({ 
                         audio: {
                             echoCancellation: true,
@@ -616,7 +606,6 @@ app.get('/', (req, res) => {
                         } 
                     });
                     
-                    // For iOS compatibility
                     if (!this.audioContext) {
                         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     }
@@ -632,10 +621,10 @@ app.get('/', (req, res) => {
                         }
                     };
 
-                    this.mediaRecorder.start(100); // Collect data every 100ms
-                    console.log('✅ Audio recording started');
+                    this.mediaRecorder.start(100);
+                    console.log('Audio recording started');
                 } catch (error) {
-                    console.error('❌ Error starting audio recording:', error);
+                    console.error('Error starting audio recording:', error);
                     this.showError('Could not access microphone. Please check permissions and try again.');
                 }
             }
@@ -645,10 +634,9 @@ app.get('/', (req, res) => {
                     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
                         this.mediaRecorder.onstop = () => {
                             const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-                            console.log('💾 Recording stopped, blob size:', audioBlob.size);
+                            console.log('Recording stopped, blob size:', audioBlob.size);
                             resolve(audioBlob);
                             
-                            // Stop all tracks
                             if (this.mediaRecorder.stream) {
                                 this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
                             }
@@ -668,15 +656,11 @@ app.get('/', (req, res) => {
                 const userCard = document.createElement('div');
                 userCard.className = 'user-card';
                 userCard.id = 'user-' + userId;
-                userCard.innerHTML = \`
-                    <div class="user-avatar">\${userName.charAt(0).toUpperCase()}</div>
-                    <div class="user-name">\${userName}</div>
-                    <button class="individual-talk-btn" id="talk-btn-\${userId}">Talk</button>
-                    <button class="block-btn" onclick="app.blockUser('\${userName}')">Block</button>
-                    <div class="user-recordings-link" onclick="app.showUserRecordings('\${userName}')" style="margin-top: 10px; cursor: pointer; color: #3498db; font-size: 12px;">
-                        View Recordings
-                    </div>
-                \`;
+                userCard.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
+                    '<div class="user-name">' + userName + '</div>' +
+                    '<button class="individual-talk-btn" id="talk-btn-' + userId + '">Talk</button>' +
+                    '<button class="block-btn" onclick="app.blockUser(\\'' + userName + '\\')">Block</button>' +
+                    '<div class="user-recordings-link" onclick="app.showUserRecordings(\\'' + userName + '\\')" style="margin-top: 10px; cursor: pointer; color: #3498db; font-size: 12px;">View Recordings</div>';
 
                 usersList.appendChild(userCard);
 
@@ -732,7 +716,6 @@ app.get('/', (req, res) => {
                     document.getElementById('recordingsList') : 
                     document.getElementById('userRecordingsList');
 
-                // Check if recording already exists
                 const existingRecording = document.getElementById(recordingId);
                 if (existingRecording) {
                     if (markDownloaded) {
@@ -741,30 +724,26 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                const recordingItem = document.createElement('div');
-                recordingItem.className = 'recording-item' + (markDownloaded ? ' recording-downloaded' : '');
-                recordingItem.id = recordingId;
-                
                 const timestamp = new Date(recording.timestamp).toLocaleString();
                 const audioBlob = recording.audioBlob ? this.base64ToBlob(recording.audioBlob) : null;
                 const audioUrl = audioBlob ? URL.createObjectURL(audioBlob) : null;
                 
-                recordingItem.innerHTML = \`
-                    <div class="recording-header">
-                        <div class="recording-info">
-                            <strong>From:</strong> \${recording.from} <br>
-                            <strong>To:</strong> \${recording.to} <br>
-                            <strong>Time:</strong> \${timestamp}
-                        </div>
-                        <div class="recording-actions">
-                            \${audioUrl ? \`
-                                <button class="play-btn" onclick="app.playRecording('\${recordingId}')">Play</button>
-                                <button class="download-btn" onclick="app.downloadRecording('\${recordingId}')">Download</button>
-                            \` : ''}
-                        </div>
-                    </div>
-                    \${audioUrl ? \`<audio controls class="audio-player" src="\${audioUrl}"></audio>\` : ''}
-                \`;
+                const recordingItem = document.createElement('div');
+                recordingItem.className = 'recording-item' + (markDownloaded ? ' recording-downloaded' : '');
+                recordingItem.id = recordingId;
+                
+                recordingItem.innerHTML = '<div class="recording-header">' +
+                    '<div class="recording-info">' +
+                    '<strong>From:</strong> ' + recording.from + '<br>' +
+                    '<strong>To:</strong> ' + recording.to + '<br>' +
+                    '<strong>Time:</strong> ' + timestamp +
+                    '</div>' +
+                    '<div class="recording-actions">' +
+                    (audioUrl ? '<button class="play-btn" onclick="app.playRecording(\\'' + recordingId + '\\')">Play</button>' +
+                    '<button class="download-btn" onclick="app.downloadRecording(\\'' + recordingId + '\\')">Download</button>' : '') +
+                    '</div>' +
+                    '</div>' +
+                    (audioUrl ? '<audio controls class="audio-player" src="' + audioUrl + '"></audio>' : '');
 
                 recordingsList.appendChild(recordingItem);
             }
@@ -772,7 +751,7 @@ app.get('/', (req, res) => {
             playRecording(recordingId) {
                 const recording = this.recordings.get(recordingId);
                 if (recording && recording.audioBlob) {
-                    const audioElement = document.querySelector(\`#\${recordingId} audio\`);
+                    const audioElement = document.querySelector('#' + recordingId + ' audio');
                     if (audioElement) {
                         audioElement.play();
                     }
@@ -788,13 +767,12 @@ app.get('/', (req, res) => {
                         const a = document.createElement('a');
                         const timestamp = new Date(recording.timestamp).toISOString().replace(/[:.]/g, '-');
                         a.href = url;
-                        a.download = \`walkie-talkie-\${recording.from}-to-\${recording.to}-\${timestamp}.webm\`;
+                        a.download = 'walkie-talkie-' + recording.from + '-to-' + recording.to + '-' + timestamp + '.webm';
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
                         
-                        // Mark as downloaded
                         if (markDownloaded) {
                             this.markRecordingDownloaded(recordingId);
                         }
@@ -808,7 +786,6 @@ app.get('/', (req, res) => {
                     recordingElement.classList.add('recording-downloaded');
                 }
                 
-                // Notify server
                 if (this.socket.connected) {
                     this.socket.emit('recording-downloaded', { recordingId });
                 }
@@ -829,9 +806,9 @@ app.get('/', (req, res) => {
                 });
 
                 if (autoDownload) {
-                    this.showSuccess(\`\${downloadedCount} recordings downloaded automatically\`);
+                    this.showSuccess(downloadedCount + ' recordings downloaded automatically');
                 } else {
-                    this.showSuccess(\`\${downloadedCount} recordings downloaded\`);
+                    this.showSuccess(downloadedCount + ' recordings downloaded');
                 }
             }
 
@@ -841,11 +818,9 @@ app.get('/', (req, res) => {
 
             showUserRecordings(userName) {
                 if (this.isAdmin) {
-                    // Filter and show recordings for specific user
                     const userRecordings = Array.from(this.recordings.entries())
                         .filter(([id, recording]) => recording.from === userName || recording.to === userName);
                     
-                    // Create modal or filter view to show user-specific recordings
                     this.showUserRecordingsModal(userName, userRecordings);
                 }
             }
@@ -863,29 +838,28 @@ app.get('/', (req, res) => {
                 modal.style.alignItems = 'center';
                 modal.style.zIndex = '1000';
                 
-                modal.innerHTML = \`
-                    <div style="background: white; padding: 20px; border-radius: 10px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
-                        <h2>Recordings for \${userName}</h2>
-                        <div id="userSpecificRecordings">
-                            \${recordings.map(([id, recording]) => \`
-                                <div class="recording-item">
-                                    <strong>From:</strong> \${recording.from} <br>
-                                    <strong>To:</strong> \${recording.to} <br>
-                                    <strong>Time:</strong> \${new Date(recording.timestamp).toLocaleString()}
-                                    <button onclick="app.downloadRecording('\${id}')" style="margin-left: 10px;">Download</button>
-                                </div>
-                            \`).join('')}
-                        </div>
-                        <button onclick="this.closest('div[style]').remove()" style="margin-top: 20px;">Close</button>
-                    </div>
-                \`;
+                let recordingsHTML = '';
+                recordings.forEach(([id, recording]) => {
+                    recordingsHTML += '<div class="recording-item">' +
+                        '<strong>From:</strong> ' + recording.from + '<br>' +
+                        '<strong>To:</strong> ' + recording.to + '<br>' +
+                        '<strong>Time:</strong> ' + new Date(recording.timestamp).toLocaleString() +
+                        '<button onclick="app.downloadRecording(\\'' + id + '\\')" style="margin-left: 10px;">Download</button>' +
+                        '</div>';
+                });
+                
+                modal.innerHTML = '<div style="background: white; padding: 20px; border-radius: 10px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">' +
+                    '<h2>Recordings for ' + userName + '</h2>' +
+                    '<div id="userSpecificRecordings">' + recordingsHTML + '</div>' +
+                    '<button onclick="this.closest(\\'div[style]\\').remove()" style="margin-top: 20px;">Close</button>' +
+                    '</div>';
                 
                 document.body.appendChild(modal);
             }
 
             blockUser(userName) {
                 if (this.isAdmin && this.roomCode) {
-                    console.log('🚫 Blocking user:', userName);
+                    console.log('Blocking user:', userName);
                     this.socket.emit('block-user', {
                         roomCode: this.roomCode,
                         userName: userName
@@ -912,7 +886,7 @@ app.get('/', (req, res) => {
             }
 
             showMessage(message) {
-                console.log('💬', message);
+                console.log(message);
             }
 
             showSuccess(message) {
@@ -945,12 +919,635 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Admin page HTML would be similar but with admin-specific features
-// Due to character limits, I'll provide the key socket event handlers:
+// Admin page route
+app.get('/admin', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Walkie Talkie</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+        .header { background: #2c3e50; color: white; padding: 20px; text-align: center; }
+        .connection-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 14px; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #e74c3c; }
+        .status-dot.connected { background: #27ae60; animation: pulse 1s infinite; }
+        .status-dot.reconnecting { background: #f39c12; animation: pulse 0.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .room-info { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; flex-wrap: wrap; }
+        #roomCode { font-size: 2em; font-weight: bold; color: #f39c12; background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 10px; margin: 0 10px; }
+        button { background: #3498db; color: white; border: none; padding: 12px 24px; border-radius: 25px; cursor: pointer; font-size: 16px; transition: all 0.3s ease; margin: 5px; }
+        button:hover { background: #2980b9; transform: translateY(-2px); }
+        button:active { transform: translateY(0); }
+        button:disabled { background: #95a5a6; cursor: not-allowed; }
+        .talk-btn { background: #27ae60; font-size: 18px; font-weight: bold; padding: 15px 30px; }
+        .talk-btn.talking { background: #e74c3c; animation: pulse 1s infinite; }
+        .talk-btn:disabled { background: #95a5a6; }
+        .users-container, .controls, .recordings { padding: 20px; border-bottom: 1px solid #ecf0f1; }
+        .users-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; }
+        .user-card { background: #f8f9fa; border: 2px solid #bdc3c7; border-radius: 10px; padding: 15px; text-align: center; transition: all 0.3s ease; }
+        .user-card.talking { border-color: #27ae60; background: #d5f4e6; animation: glow-green 1s infinite; }
+        .user-card.receiving { border-color: #e74c3c; background: #fadbd8; animation: glow-red 1s infinite; }
+        @keyframes glow-green { 0% { box-shadow: 0 0 5px #27ae60; } 50% { box-shadow: 0 0 20px #27ae60; } 100% { box-shadow: 0 0 5px #27ae60; } }
+        @keyframes glow-red { 0% { box-shadow: 0 0 5px #e74c3c; } 50% { box-shadow: 0 0 20px #e74c3c; } 100% { box-shadow: 0 0 5px #e74c3c; } }
+        .user-avatar { width: 60px; height: 60px; border-radius: 50%; background: #3498db; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; margin: 0 auto 10px; }
+        .user-name { font-weight: bold; margin-bottom: 10px; }
+        .individual-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+        .individual-talk-btn { background: #9b59b6; }
+        .block-btn { background: #e74c3c; padding: 8px 16px; font-size: 12px; }
+        .recordings-list { max-height: 300px; overflow-y: auto; margin: 10px 0; }
+        .recording-item { background: #f8f9fa; border: 1px solid #bdc3c7; border-radius: 8px; padding: 15px; margin: 10px 0; }
+        .recording-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .recording-info { flex: 1; }
+        .recording-actions { display: flex; gap: 10px; }
+        .play-btn, .download-btn { padding: 8px 16px; font-size: 14px; border-radius: 20px; }
+        .play-btn { background: #27ae60; }
+        .play-btn:hover { background: #219652; }
+        .download-btn { background: #f39c12; }
+        .download-btn:hover { background: #e67e22; }
+        .audio-player { width: 100%; margin-top: 10px; }
+        .recording-downloaded { border-left: 4px solid #27ae60; background: #d5f4e6; }
+        .hidden { display: none !important; }
+        .error-message { background: #e74c3c; color: white; padding: 15px; border-radius: 8px; margin: 15px; text-align: center; }
+        .success-message { background: #27ae60; color: white; padding: 15px; border-radius: 8px; margin: 15px; text-align: center; }
+        @media (max-width: 768px) { .container { margin: 10px; border-radius: 10px; } .room-info { flex-direction: column; gap: 15px; } .users-list { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Walkie Talkie Admin</h1>
+            <div class="connection-status">
+                <div class="status-dot" id="connectionStatus"></div>
+                <span id="connectionText">Connecting...</span>
+            </div>
+            <div class="room-info">
+                <div id="roomCodeDisplay">Room Code: <span id="roomCode">----</span></div>
+                <button id="createRoomBtn" disabled>Create New Room</button>
+            </div>
+        </div>
+
+        <div class="users-container">
+            <h2>Connected Users</h2>
+            <div id="usersList" class="users-list"></div>
+        </div>
+
+        <div class="controls">
+            <h2>Admin Controls</h2>
+            <div class="talk-controls">
+                <button id="talkToAllBtn" class="talk-btn" disabled>Talk to All Users</button>
+                <div class="individual-controls" id="individualControls"></div>
+            </div>
+        </div>
+
+        <div class="recordings">
+            <h2>Recordings</h2>
+            <div id="recordingsList" class="recordings-list"></div>
+            <button id="downloadAllBtn" class="download-btn" disabled>Download All Recordings</button>
+        </div>
+
+        <div class="error-message hidden" id="errorMessage"></div>
+        <div class="success-message hidden" id="successMessage"></div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Admin-specific JavaScript
+        class WalkieTalkieApp {
+            constructor() {
+                this.socket = null;
+                this.roomCode = null;
+                this.userName = 'Admin';
+                this.isAdmin = true;
+                this.isTalking = false;
+                this.mediaRecorder = null;
+                this.audioChunks = [];
+                this.currentRecordingId = null;
+                this.recordings = new Map();
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.reconnectTimeout = null;
+                this.audioContext = null;
+                this.init();
+            }
+
+            init() {
+                this.connectToServer();
+                this.initAdmin();
+                this.setupAutoReconnect();
+            }
+
+            connectToServer() {
+                console.log('Connecting to server...');
+                this.updateConnectionStatus('connecting');
+                
+                if (this.socket) {
+                    this.socket.disconnect();
+                }
+
+                this.socket = io({
+                    reconnection: false
+                });
+                
+                this.socket.on('connect', () => {
+                    console.log('Connected to server');
+                    this.reconnectAttempts = 0;
+                    this.updateConnectionStatus('connected');
+                    document.getElementById('createRoomBtn').disabled = false;
+                });
+
+                this.socket.on('disconnect', (reason) => {
+                    console.log('Disconnected from server:', reason);
+                    this.updateConnectionStatus('disconnected');
+                    document.getElementById('createRoomBtn').disabled = true;
+                    document.getElementById('talkToAllBtn').disabled = true;
+                    document.getElementById('downloadAllBtn').disabled = true;
+                    
+                    if (reason === 'io server disconnect') {
+                        this.socket.connect();
+                    } else {
+                        this.scheduleReconnect();
+                    }
+                });
+
+                this.socket.on('connect_error', (error) => {
+                    console.log('Connection error:', error);
+                    this.updateConnectionStatus('error');
+                    this.scheduleReconnect();
+                });
+
+                this.socket.on('reconnect_attempt', (attempt) => {
+                    console.log('Reconnection attempt:', attempt);
+                    this.updateConnectionStatus('reconnecting');
+                });
+
+                this.setupSocketListeners();
+            }
+
+            scheduleReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                    console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
+                    
+                    this.reconnectTimeout = setTimeout(() => {
+                        this.connectToServer();
+                    }, delay);
+                } else {
+                    console.log('Max reconnection attempts reached');
+                    this.showError('Unable to connect to server. Please refresh the page.');
+                }
+            }
+
+            setupAutoReconnect() {
+                window.addEventListener('online', () => {
+                    console.log('Browser is online, reconnecting...');
+                    this.connectToServer();
+                });
+
+                window.addEventListener('beforeunload', () => {
+                    if (this.reconnectTimeout) {
+                        clearTimeout(this.reconnectTimeout);
+                    }
+                    if (this.socket) {
+                        this.socket.disconnect();
+                    }
+                });
+            }
+
+            updateConnectionStatus(status) {
+                const statusDot = document.getElementById('connectionStatus');
+                const statusText = document.getElementById('connectionText');
+                
+                statusDot.className = 'status-dot';
+                statusText.style.color = '';
+                
+                switch(status) {
+                    case 'connected':
+                        statusDot.classList.add('connected');
+                        statusText.textContent = 'Connected';
+                        statusText.style.color = '#27ae60';
+                        break;
+                    case 'connecting':
+                        statusText.textContent = 'Connecting...';
+                        statusText.style.color = '#3498db';
+                        break;
+                    case 'reconnecting':
+                        statusDot.classList.add('reconnecting');
+                        statusText.textContent = 'Reconnecting...';
+                        statusText.style.color = '#f39c12';
+                        break;
+                    case 'disconnected':
+                        statusText.textContent = 'Disconnected';
+                        statusText.style.color = '#e74c3c';
+                        break;
+                    case 'error':
+                        statusText.textContent = 'Connection Error';
+                        statusText.style.color = '#e74c3c';
+                        break;
+                }
+            }
+
+            initAdmin() {
+                document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
+                document.getElementById('talkToAllBtn').addEventListener('mousedown', () => this.startTalking('all'));
+                document.getElementById('talkToAllBtn').addEventListener('mouseup', () => this.stopTalking());
+                document.getElementById('talkToAllBtn').addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startTalking('all');
+                });
+                document.getElementById('talkToAllBtn').addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopTalking();
+                });
+                document.getElementById('downloadAllBtn').addEventListener('click', () => this.downloadAllRecordings());
+            }
+
+            setupSocketListeners() {
+                this.socket.on('room-created', (data) => {
+                    console.log('Room created:', data.roomCode);
+                    this.roomCode = data.roomCode;
+                    document.getElementById('roomCode').textContent = data.roomCode;
+                    this.showSuccess('Room created with code: ' + data.roomCode);
+                    document.getElementById('talkToAllBtn').disabled = false;
+                    document.getElementById('downloadAllBtn').disabled = false;
+                });
+
+                this.socket.on('user-joined', (data) => {
+                    console.log('User joined:', data.userName);
+                    this.addUserToUI(data.userId, data.userName);
+                    this.showSuccess('User ' + data.userName + ' joined the room');
+                });
+
+                this.socket.on('users-update', (users) => {
+                    console.log('Users updated:', users.length + ' users');
+                    this.updateUsersList(users);
+                });
+
+                this.socket.on('user-talking', (data) => {
+                    console.log('User talking:', data.userId, 'isTalking:', data.isTalking);
+                    this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
+                    if (data.recordingId) {
+                        this.currentRecordingId = data.recordingId;
+                    }
+                });
+
+                this.socket.on('recording-started', (data) => {
+                    console.log('Recording started:', data.recordingId);
+                    this.currentRecordingId = data.recordingId;
+                    this.startAudioRecording();
+                });
+
+                this.socket.on('recording-complete', (data) => {
+                    console.log('Recording complete:', data.recordingId);
+                    this.addRecordingToUI(data);
+                });
+
+                this.socket.on('user-left', (data) => {
+                    console.log('User left:', data.userName);
+                    this.removeUserFromUI(data.userId);
+                    this.showMessage('User ' + data.userName + ' left the room');
+                });
+
+                this.socket.on('error', (data) => {
+                    console.log('Error:', data.message);
+                    this.showError(data.message);
+                });
+            }
+
+            createRoom() {
+                console.log('Creating room...');
+                this.socket.emit('create-room');
+            }
+
+            startTalking(targetUserId) {
+                if (!this.roomCode || !this.socket.connected) {
+                    this.showError('Not connected to room');
+                    return;
+                }
+                
+                console.log('Start talking to:', targetUserId);
+                this.isTalking = true;
+                
+                const talkBtn = targetUserId === 'all' ? 
+                    document.getElementById('talkToAllBtn') : 
+                    document.getElementById('talk-btn-' + targetUserId);
+                if (talkBtn) talkBtn.classList.add('talking');
+
+                this.socket.emit('start-talking', {
+                    targetUserId: targetUserId,
+                    roomCode: this.roomCode
+                });
+            }
+
+            stopTalking() {
+                if (!this.isTalking) return;
+                
+                console.log('Stop talking');
+                this.isTalking = false;
+                
+                document.querySelectorAll('.talk-btn').forEach(btn => {
+                    btn.classList.remove('talking');
+                });
+
+                this.stopAudioRecording().then(audioBlob => {
+                    if (this.currentRecordingId && audioBlob) {
+                        console.log('Sending recording:', this.currentRecordingId);
+                        this.socket.emit('stop-talking', {
+                            recordingId: this.currentRecordingId,
+                            audioBlob: this.blobToBase64(audioBlob)
+                        });
+                        this.currentRecordingId = null;
+                    }
+                });
+            }
+
+            blobToBase64(blob) {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.readAsDataURL(blob);
+                });
+            }
+
+            base64ToBlob(base64) {
+                const byteString = atob(base64.split(',')[1]);
+                const mimeString = base64.split(',')[0].split(':')[1].split(';')[0];
+                const ab = new ArrayBuffer(byteString.length);
+                const ia = new Uint8Array(ab);
+                for (let i = 0; i < byteString.length; i++) {
+                    ia[i] = byteString.charCodeAt(i);
+                }
+                return new Blob([ab], { type: mimeString });
+            }
+
+            async startAudioRecording() {
+                try {
+                    console.log('Starting audio recording...');
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                            channelCount: 1,
+                            sampleRate: 44100
+                        } 
+                    });
+                    
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    
+                    this.mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
+                    this.audioChunks = [];
+
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.audioChunks.push(event.data);
+                        }
+                    };
+
+                    this.mediaRecorder.start(100);
+                    console.log('Audio recording started');
+                } catch (error) {
+                    console.error('Error starting audio recording:', error);
+                    this.showError('Could not access microphone. Please check permissions and try again.');
+                }
+            }
+
+            stopAudioRecording() {
+                return new Promise((resolve) => {
+                    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+                        this.mediaRecorder.onstop = () => {
+                            const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                            console.log('Recording stopped, blob size:', audioBlob.size);
+                            resolve(audioBlob);
+                            this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                        };
+                        this.mediaRecorder.stop();
+                    } else {
+                        resolve(null);
+                    }
+                });
+            }
+
+            addUserToUI(userId, userName) {
+                const usersList = document.getElementById('usersList');
+
+                const userCard = document.createElement('div');
+                userCard.className = 'user-card';
+                userCard.id = 'user-' + userId;
+                userCard.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
+                    '<div class="user-name">' + userName + '</div>' +
+                    '<button class="individual-talk-btn" id="talk-btn-' + userId + '">Talk</button>' +
+                    '<button class="block-btn" onclick="app.blockUser(\\'' + userName + '\\')">Block</button>' +
+                    '<div class="user-recordings-link" onclick="app.showUserRecordings(\\'' + userName + '\\')" style="margin-top: 10px; cursor: pointer; color: #3498db; font-size: 12px;">View Recordings</div>';
+
+                usersList.appendChild(userCard);
+
+                const talkBtn = document.getElementById('talk-btn-' + userId);
+                talkBtn.addEventListener('mousedown', () => this.startTalking(userId));
+                talkBtn.addEventListener('mouseup', () => this.stopTalking());
+                talkBtn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startTalking(userId);
+                });
+                talkBtn.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopTalking();
+                });
+            }
+
+            removeUserFromUI(userId) {
+                const userElement = document.getElementById('user-' + userId);
+                if (userElement) {
+                    userElement.remove();
+                }
+            }
+
+            updateUsersList(users) {
+                const usersList = document.getElementById('usersList');
+                usersList.innerHTML = '';
+                users.forEach(user => {
+                    this.addUserToUI(user.id, user.name);
+                });
+            }
+
+            updateTalkingIndicator(userId, targetUserId, isTalking) {
+                const userCard = document.getElementById('user-' + userId);
+                if (userCard) {
+                    userCard.classList.toggle('talking', isTalking && userId !== this.socket.id);
+                    userCard.classList.toggle('receiving', isTalking && targetUserId === userId);
+                }
+            }
+
+            addRecordingToUI(recording) {
+                const recordingId = recording.recordingId || ('rec-' + Date.now());
+                this.recordings.set(recordingId, recording);
+
+                const recordingsList = document.getElementById('recordingsList');
+
+                const existingRecording = document.getElementById(recordingId);
+                if (existingRecording) return;
+
+                const timestamp = new Date(recording.timestamp).toLocaleString();
+                const audioBlob = recording.audioBlob ? this.base64ToBlob(recording.audioBlob) : null;
+                const audioUrl = audioBlob ? URL.createObjectURL(audioBlob) : null;
+                
+                const recordingItem = document.createElement('div');
+                recordingItem.className = 'recording-item';
+                recordingItem.id = recordingId;
+                
+                recordingItem.innerHTML = '<div class="recording-header">' +
+                    '<div class="recording-info">' +
+                    '<strong>From:</strong> ' + recording.from + '<br>' +
+                    '<strong>To:</strong> ' + recording.to + '<br>' +
+                    '<strong>Time:</strong> ' + timestamp +
+                    '</div>' +
+                    '<div class="recording-actions">' +
+                    (audioUrl ? '<button class="play-btn" onclick="app.playRecording(\\'' + recordingId + '\\')">Play</button>' +
+                    '<button class="download-btn" onclick="app.downloadRecording(\\'' + recordingId + '\\')">Download</button>' : '') +
+                    '</div>' +
+                    '</div>' +
+                    (audioUrl ? '<audio controls class="audio-player" src="' + audioUrl + '"></audio>' : '');
+
+                recordingsList.appendChild(recordingItem);
+            }
+
+            playRecording(recordingId) {
+                const recording = this.recordings.get(recordingId);
+                if (recording && recording.audioBlob) {
+                    const audioElement = document.querySelector('#' + recordingId + ' audio');
+                    if (audioElement) {
+                        audioElement.play();
+                    }
+                }
+            }
+
+            downloadRecording(recordingId) {
+                const recording = this.recordings.get(recordingId);
+                if (recording && recording.audioBlob) {
+                    const blob = this.base64ToBlob(recording.audioBlob);
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    const timestamp = new Date(recording.timestamp).toISOString().replace(/[:.]/g, '-');
+                    a.href = url;
+                    a.download = 'walkie-talkie-' + recording.from + '-to-' + recording.to + '-' + timestamp + '.webm';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+            }
+
+            downloadAllRecordings() {
+                if (this.recordings.size === 0) {
+                    this.showMessage('No recordings to download');
+                    return;
+                }
+
+                let downloadedCount = 0;
+                this.recordings.forEach((recording, recordingId) => {
+                    if (recording.audioBlob) {
+                        this.downloadRecording(recordingId);
+                        downloadedCount++;
+                    }
+                });
+
+                this.showSuccess(downloadedCount + ' recordings downloaded');
+            }
+
+            showUserRecordings(userName) {
+                const userRecordings = Array.from(this.recordings.entries())
+                    .filter(([id, recording]) => recording.from === userName || recording.to === userName);
+                
+                this.showUserRecordingsModal(userName, userRecordings);
+            }
+
+            showUserRecordingsModal(userName, recordings) {
+                const modal = document.createElement('div');
+                modal.style.position = 'fixed';
+                modal.style.top = '0';
+                modal.style.left = '0';
+                modal.style.width = '100%';
+                modal.style.height = '100%';
+                modal.style.backgroundColor = 'rgba(0,0,0,0.5)';
+                modal.style.display = 'flex';
+                modal.style.justifyContent = 'center';
+                modal.style.alignItems = 'center';
+                modal.style.zIndex = '1000';
+                
+                let recordingsHTML = '';
+                recordings.forEach(([id, recording]) => {
+                    recordingsHTML += '<div class="recording-item">' +
+                        '<strong>From:</strong> ' + recording.from + '<br>' +
+                        '<strong>To:</strong> ' + recording.to + '<br>' +
+                        '<strong>Time:</strong> ' + new Date(recording.timestamp).toLocaleString() +
+                        '<button onclick="app.downloadRecording(\\'' + id + '\\')" style="margin-left: 10px;">Download</button>' +
+                        '</div>';
+                });
+                
+                modal.innerHTML = '<div style="background: white; padding: 20px; border-radius: 10px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">' +
+                    '<h2>Recordings for ' + userName + '</h2>' +
+                    '<div id="userSpecificRecordings">' + recordingsHTML + '</div>' +
+                    '<button onclick="this.closest(\\'div[style]\\').remove()" style="margin-top: 20px;">Close</button>' +
+                    '</div>';
+                
+                document.body.appendChild(modal);
+            }
+
+            blockUser(userName) {
+                if (this.roomCode) {
+                    console.log('Blocking user:', userName);
+                    this.socket.emit('block-user', {
+                        roomCode: this.roomCode,
+                        userName: userName
+                    });
+                }
+            }
+
+            showMessage(message) {
+                console.log(message);
+            }
+
+            showSuccess(message) {
+                const successElement = document.getElementById('successMessage');
+                if (successElement) {
+                    successElement.textContent = message;
+                    successElement.classList.remove('hidden');
+                    setTimeout(() => {
+                        successElement.classList.add('hidden');
+                    }, 5000);
+                }
+            }
+
+            showError(message) {
+                const errorElement = document.getElementById('errorMessage');
+                if (errorElement) {
+                    errorElement.textContent = message;
+                    errorElement.classList.remove('hidden');
+                    setTimeout(() => {
+                        errorElement.classList.add('hidden');
+                    }, 5000);
+                }
+            }
+        }
+
+        const app = new WalkieTalkieApp();
+    </script>
+</body>
+</html>
+  `);
+});
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('✅ User connected:', socket.id);
+  console.log('User connected:', socket.id);
 
   // Admin creates room
   socket.on('create-room', (data) => {
@@ -964,33 +1561,32 @@ io.on('connection', (socket) => {
     rooms.set(roomCode, room);
     
     socket.join(roomCode);
-    console.log('🏠 Room created:', roomCode, 'by admin:', socket.id);
+    console.log('Room created:', roomCode, 'by admin:', socket.id);
     socket.emit('room-created', { roomCode });
   });
 
   // User joins room
   socket.on('join-room', (data) => {
     const { roomCode, userName } = data;
-    console.log('🔄 Join room attempt:', roomCode, 'by user:', userName);
+    console.log('Join room attempt:', roomCode, 'by user:', userName);
 
     const room = rooms.get(roomCode);
 
     if (!room) {
-      console.log('❌ Room not found:', roomCode);
+      console.log('Room not found:', roomCode);
       socket.emit('error', { message: 'Room not found. Please check the room code.' });
       return;
     }
 
     if (room.blockedUsers.has(userName)) {
-      console.log('🚫 User blocked from room:', userName);
+      console.log('User blocked from room:', userName);
       socket.emit('error', { message: 'You are blocked from this room' });
       return;
     }
 
-    // Check if user name already exists in room
     const existingUser = Array.from(room.users.values()).find(user => user.name === userName);
     if (existingUser) {
-      console.log('❌ User name already exists:', userName);
+      console.log('User name already exists:', userName);
       socket.emit('error', { message: 'User name already exists in this room. Please choose a different name.' });
       return;
     }
@@ -1001,22 +1597,19 @@ io.on('connection', (socket) => {
       isTalking: false
     });
 
-    // Initialize user recordings storage
     if (!userRecordingSessions.has(userName)) {
       userRecordingSessions.set(userName, []);
     }
 
     socket.join(roomCode);
-    console.log('✅ User joined room:', userName, 'to room:', roomCode);
+    console.log('User joined room:', userName, 'to room:', roomCode);
     socket.emit('room-joined', { roomCode, userName });
     
-    // Notify admin about new user
     socket.to(room.admin).emit('user-joined', {
       userId: socket.id,
       userName: userName
     });
 
-    // Send current users to admin
     const users = Array.from(room.users.values());
     socket.to(room.admin).emit('users-update', users);
   });
@@ -1024,12 +1617,12 @@ io.on('connection', (socket) => {
   // Start talking (push-to-talk)
   socket.on('start-talking', (data) => {
     const { targetUserId, roomCode } = data;
-    console.log('🎤 Start talking in room:', roomCode, 'from:', socket.id, 'to:', targetUserId);
+    console.log('Start talking in room:', roomCode, 'from:', socket.id, 'to:', targetUserId);
 
     const room = rooms.get(roomCode);
     
     if (!room) {
-      console.log('❌ Room not found for talking:', roomCode);
+      console.log('Room not found for talking:', roomCode);
       return;
     }
 
@@ -1039,7 +1632,6 @@ io.on('connection', (socket) => {
     if (speaker) {
       speaker.isTalking = true;
       
-      // Create recording session
       const recordingId = uuidv4();
       const recordingData = {
         recordingId: recordingId,
@@ -1053,16 +1645,14 @@ io.on('connection', (socket) => {
 
       userRecordings.set(recordingId, recordingData);
 
-      // Store recording for user
       if (speaker.name !== 'Admin') {
         const userRecordings = userRecordingSessions.get(speaker.name) || [];
         userRecordings.push(recordingData);
         userRecordingSessions.set(speaker.name, userRecordings);
       }
 
-      console.log('🔴 Recording started:', recordingId, 'From:', speaker.name, 'To:', targetUserId);
+      console.log('Recording started:', recordingId, 'From:', speaker.name, 'To:', targetUserId);
 
-      // Notify all in room about who is talking to whom
       io.to(roomCode).emit('user-talking', {
         userId: socket.id,
         targetUserId: targetUserId,
@@ -1077,7 +1667,7 @@ io.on('connection', (socket) => {
   // Stop talking
   socket.on('stop-talking', (data) => {
     const { recordingId, audioBlob } = data;
-    console.log('🔇 Stop talking, recording:', recordingId);
+    console.log('Stop talking, recording:', recordingId);
 
     const roomCode = Array.from(rooms.entries()).find(([code, room]) => 
       room.users.has(socket.id) || room.admin === socket.id
@@ -1091,32 +1681,26 @@ io.on('connection', (socket) => {
       if (speaker) {
         speaker.isTalking = false;
 
-        // Update recording with audio data
         const recording = userRecordings.get(recordingId);
         if (recording) {
           recording.audioBlob = audioBlob;
           recording.endTime = new Date();
-          console.log('💾 Recording saved:', recordingId, 'Duration:', (recording.endTime - recording.timestamp) + 'ms');
+          console.log('Recording saved:', recordingId, 'Duration:', (recording.endTime - recording.timestamp) + 'ms');
 
-          // Send recording data to relevant parties
           if (recording.to === 'Admin') {
-            // Send to admin
             io.to(room.admin).emit('recording-complete', {
               ...recording,
-              to: recording.from // Fix: Show who it's from instead of "Admin"
+              to: recording.from
             });
           } else if (recording.to === 'All Users') {
-            // Send to all users
             room.users.forEach((user, userId) => {
               io.to(userId).emit('recording-complete', {
                 ...recording,
                 to: 'You (All)'
               });
             });
-            // Also send to admin
             io.to(room.admin).emit('recording-complete', recording);
           } else {
-            // Send to specific user
             const targetUser = Array.from(room.users.entries()).find(([id, user]) => user.name === recording.to);
             if (targetUser) {
               const [targetUserId, targetUserData] = targetUser;
@@ -1126,12 +1710,10 @@ io.on('connection', (socket) => {
               });
             }
             
-            // Always send to admin for records
             io.to(room.admin).emit('recording-complete', recording);
           }
         }
 
-        // Notify all to stop talking indicators
         io.to(roomCode).emit('user-talking', {
           userId: socket.id,
           isTalking: false
@@ -1146,27 +1728,25 @@ io.on('connection', (socket) => {
     const recording = userRecordings.get(recordingId);
     if (recording) {
       recording.downloaded = true;
-      console.log('📥 Recording marked as downloaded:', recordingId);
+      console.log('Recording marked as downloaded:', recordingId);
     }
   });
 
   // Block user
   socket.on('block-user', (data) => {
     const { roomCode, userName } = data;
-    console.log('🚫 Block user request:', userName, 'in room:', roomCode);
+    console.log('Block user request:', userName, 'in room:', roomCode);
     
     const room = rooms.get(roomCode);
     
     if (room && socket.id === room.admin) {
       room.blockedUsers.add(userName);
       
-      // Find and disconnect blocked user
       const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
       if (userEntry) {
         const [userId, user] = userEntry;
-        console.log('🔴 Disconnecting blocked user:', userName);
+        console.log('Disconnecting blocked user:', userName);
         
-        // Auto-download user's recordings before blocking
         const userRecordings = userRecordingSessions.get(userName) || [];
         userRecordings.forEach(recording => {
           if (!recording.downloaded && recording.audioBlob) {
@@ -1193,15 +1773,12 @@ io.on('connection', (socket) => {
 
   // Disconnection handling
   socket.on('disconnect', (reason) => {
-    console.log('❌ User disconnected:', socket.id, 'Reason:', reason);
+    console.log('User disconnected:', socket.id, 'Reason:', reason);
     
-    // Find room where this socket was admin or user
     for (const [roomCode, room] of rooms.entries()) {
       if (room.admin === socket.id) {
-        // Admin disconnected - close room and notify users
-        console.log('🏠 Admin disconnected, closing room:', roomCode);
+        console.log('Admin disconnected, closing room:', roomCode);
         
-        // Auto-download all recordings for users before closing
         room.users.forEach((user, userId) => {
           const userRecs = userRecordingSessions.get(user.name) || [];
           userRecs.forEach(recording => {
@@ -1218,18 +1795,15 @@ io.on('connection', (socket) => {
         rooms.delete(roomCode);
         break;
       } else if (room.users.has(socket.id)) {
-        // User disconnected
         const user = room.users.get(socket.id);
         room.users.delete(socket.id);
-        console.log('👤 User disconnected:', user.name, 'from room:', roomCode);
+        console.log('User disconnected:', user.name, 'from room:', roomCode);
         
-        // Notify admin
         socket.to(room.admin).emit('user-left', {
           userId: socket.id,
           userName: user.name
         });
         
-        // Send updated users list to admin
         const users = Array.from(room.users.values());
         socket.to(room.admin).emit('users-update', users);
         break;
@@ -1240,7 +1814,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log('🚀 Server running on port', PORT);
-  console.log('📱 User Page: http://localhost:' + PORT + '/');
-  console.log('👑 Admin Page: http://localhost:' + PORT + '/admin');
+  console.log('Server running on port', PORT);
+  console.log('User Page: http://localhost:' + PORT + '/');
+  console.log('Admin Page: http://localhost:' + PORT + '/admin');
 });
