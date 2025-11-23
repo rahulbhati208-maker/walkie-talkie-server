@@ -194,6 +194,20 @@ app.get('/', (req, res) => {
             color: #666; 
             margin-top: 8px; 
         }
+        .volume-meter {
+            width: 100%;
+            height: 4px;
+            background: #ecf0f1;
+            border-radius: 2px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .volume-level {
+            height: 100%;
+            background: #27ae60;
+            width: 0%;
+            transition: width 0.1s ease;
+        }
     </style>
 </head>
 <body>
@@ -224,8 +238,12 @@ app.get('/', (req, res) => {
                 <span>Microphone Ready</span>
             </div>
             
+            <div class="volume-meter">
+                <div class="volume-level" id="volumeLevel"></div>
+            </div>
+            
             <button id="talkBtn" class="talk-btn">Click to Talk</button>
-            <div class="audio-quality">High Quality Audio - Zero Latency</div>
+            <div class="audio-quality">Crystal Clear Audio - Zero Latency</div>
             
             <div class="status-indicators">
                 <div class="status-item">
@@ -255,9 +273,8 @@ app.get('/', (req, res) => {
                 this.audioContext = null;
                 this.mediaStreamSource = null;
                 this.scriptProcessor = null;
+                this.analyser = null;
                 this.reconnectAttempts = 0;
-                this.maxReconnectAttempts = 5;
-                this.reconnectTimeout = null;
                 this.audioQueue = [];
                 this.isPlaying = false;
                 this.init();
@@ -267,7 +284,6 @@ app.get('/', (req, res) => {
                 this.loadFromLocalStorage();
                 this.connectToServer();
                 this.checkPageType();
-                this.setupAutoReconnect();
             }
 
             loadFromLocalStorage() {
@@ -395,14 +411,18 @@ app.get('/', (req, res) => {
                 }
             }
 
-            initAdmin() {
-                document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                this.testMicrophoneAccess();
-            }
-
             initUser() {
                 document.getElementById('joinRoomBtn').addEventListener('click', () => this.joinRoom());
-                document.getElementById('talkBtn').addEventListener('click', () => this.toggleTalking('admin'));
+                document.getElementById('talkBtn').addEventListener('mousedown', () => this.startTalking());
+                document.getElementById('talkBtn').addEventListener('mouseup', () => this.stopTalking());
+                document.getElementById('talkBtn').addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startTalking();
+                });
+                document.getElementById('talkBtn').addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopTalking();
+                });
                 
                 document.getElementById('userName').addEventListener('keypress', (e) => {
                     if (e.key === 'Enter') this.joinRoom();
@@ -423,7 +443,8 @@ app.get('/', (req, res) => {
                             autoGainControl: true,
                             channelCount: 1,
                             sampleRate: 48000,
-                            latency: 0.01
+                            sampleSize: 16,
+                            latency: 0
                         } 
                     });
                     
@@ -436,14 +457,6 @@ app.get('/', (req, res) => {
             }
 
             setupSocketListeners() {
-                this.socket.on('room-created', (data) => {
-                    console.log('Room created:', data.roomCode);
-                    this.roomCode = data.roomCode;
-                    document.getElementById('roomCode').textContent = data.roomCode;
-                    this.saveToLocalStorage();
-                    this.showSuccess('Room created with code: ' + data.roomCode);
-                });
-
                 this.socket.on('room-joined', (data) => {
                     console.log('Room joined:', data.roomCode);
                     this.roomCode = data.roomCode;
@@ -456,35 +469,24 @@ app.get('/', (req, res) => {
                     this.showSuccess('Successfully joined room: ' + data.roomCode);
                 });
 
-                this.socket.on('user-joined', (data) => {
-                    console.log('User joined:', data.userName);
-                    this.addUserToUI(data.userId, data.userName);
-                    this.showSuccess('User ' + data.userName + ' joined the room');
-                });
-
-                this.socket.on('users-update', (users) => {
-                    console.log('Users updated:', users.length + ' users');
-                    this.updateUsersList(users);
-                });
-
                 this.socket.on('user-talking', (data) => {
                     console.log('User talking:', data.userId, 'isTalking:', data.isTalking);
-                    this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
+                    this.updateTalkingIndicator(data.userId, data.isTalking);
                 });
 
                 this.socket.on('audio-data', (data) => {
-                    this.playAudio(data.audioBuffer);
+                    if (data.targetUserId === 'all' || data.targetUserId === this.socket.id) {
+                        this.playAudio(data.audioBuffer);
+                    }
                 });
 
                 this.socket.on('user-left', (data) => {
                     console.log('User left:', data.userName);
-                    this.removeUserFromUI(data.userId);
                     this.showMessage('User ' + data.userName + ' left the room');
                 });
 
                 this.socket.on('user-reconnected', (data) => {
                     console.log('User reconnected:', data.userName);
-                    this.updateUserConnection(data.userId, true);
                     this.showSuccess('User ' + data.userName + ' reconnected');
                 });
 
@@ -506,11 +508,6 @@ app.get('/', (req, res) => {
                 });
             }
 
-            createRoom() {
-                console.log('Creating room...');
-                this.socket.emit('create-room');
-            }
-
             joinRoom() {
                 const userName = document.getElementById('userName').value.trim();
                 const roomCode = document.getElementById('roomCode').value.trim();
@@ -530,46 +527,37 @@ app.get('/', (req, res) => {
                 this.socket.emit('join-room', { roomCode, userName });
             }
 
-            toggleTalking(targetUserId) {
+            startTalking() {
                 if (!this.roomCode || !this.socket.connected) {
                     this.showError('Not connected to room');
                     return;
                 }
                 
-                if (this.isTalking) {
-                    this.stopTalking();
-                } else {
-                    this.startTalking(targetUserId);
-                }
-            }
-
-            async startTalking(targetUserId) {
-                console.log('Start talking to:', targetUserId);
+                console.log('Start talking to admin');
                 this.isTalking = true;
                 
-                if (!this.isAdmin) {
-                    document.getElementById('talkBtn').classList.add('talking');
-                    document.getElementById('talkBtn').textContent = 'Stop Talking';
-                    document.getElementById('userStatus').classList.add('active');
-                }
+                document.getElementById('talkBtn').classList.add('talking');
+                document.getElementById('talkBtn').textContent = 'Release to Stop';
+                document.getElementById('userStatus').classList.add('active');
 
-                await this.startAudioStreaming();
+                this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
-                    targetUserId: targetUserId,
-                    roomCode: this.roomCode
+                    roomCode: this.roomCode,
+                    targetUserId: 'admin'
                 });
             }
 
             stopTalking() {
+                if (!this.isTalking) return;
+                
                 console.log('Stop talking');
                 this.isTalking = false;
                 
-                if (!this.isAdmin) {
-                    document.getElementById('talkBtn').classList.remove('talking');
-                    document.getElementById('talkBtn').textContent = 'Click to Talk';
-                    document.getElementById('userStatus').classList.remove('active');
-                }
+                document.getElementById('talkBtn').classList.remove('talking');
+                document.getElementById('talkBtn').textContent = 'Click to Talk';
+                document.getElementById('userStatus').classList.remove('active');
+                document.getElementById('volumeLevel').style.width = '0%';
 
                 this.stopAudioStreaming();
 
@@ -588,7 +576,8 @@ app.get('/', (req, res) => {
                                 autoGainControl: true,
                                 channelCount: 1,
                                 sampleRate: 48000,
-                                latency: 0.01
+                                sampleSize: 16,
+                                latency: 0
                             } 
                         });
                     }
@@ -601,22 +590,36 @@ app.get('/', (req, res) => {
                     }
 
                     this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+                    
+                    // Add analyser for volume meter
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    this.mediaStreamSource.connect(this.analyser);
+                    
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
 
                     this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                         if (this.isTalking && this.socket.connected) {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
+                            // Update volume meter
+                            const rms = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
+                            const volume = Math.min(100, Math.max(0, rms * 200));
+                            document.getElementById('volumeLevel').style.width = volume + '%';
+                            
+                            // Convert to Int16Array for efficient transmission
                             const int16Data = new Int16Array(inputData.length);
                             for (let i = 0; i < inputData.length; i++) {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
+                            // Send audio data directly to admin
                             this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
-                                sampleRate: this.audioContext.sampleRate
+                                sampleRate: this.audioContext.sampleRate,
+                                targetUserId: 'admin'
                             });
                         }
                     };
@@ -640,6 +643,10 @@ app.get('/', (req, res) => {
                     this.mediaStreamSource.disconnect();
                     this.mediaStreamSource = null;
                 }
+                if (this.analyser) {
+                    this.analyser.disconnect();
+                    this.analyser = null;
+                }
                 console.log('Audio streaming stopped');
             }
 
@@ -655,6 +662,7 @@ app.get('/', (req, res) => {
                     const int16Data = new Int16Array(audioBuffer);
                     const float32Data = new Float32Array(int16Data.length);
                     
+                    // Convert back to Float32Array for playback
                     for (let i = 0; i < int16Data.length; i++) {
                         float32Data[i] = int16Data[i] / 32768;
                     }
@@ -672,94 +680,10 @@ app.get('/', (req, res) => {
                 }
             }
 
-            addUserToUI(userId, userName) {
-                if (!this.isAdmin) return;
-
-                const usersList = document.getElementById('usersList');
-
-                const userCircle = document.createElement('div');
-                userCircle.className = 'user-circle connected';
-                userCircle.id = 'user-' + userId;
-                userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
-                    '<div class="user-name">' + userName + '</div>' +
-                    '<div class="user-status online"></div>' +
-                    '<button class="block-btn" id="block-btn-' + userName + '">Block</button>';
-
-                usersList.appendChild(userCircle);
-
-                userCircle.addEventListener('click', (e) => {
-                    if (!e.target.classList.contains('block-btn') && userCircle.classList.contains('connected')) {
-                        this.toggleTalking(userId);
-                    }
-                });
-
-                const blockBtn = document.getElementById('block-btn-' + userName);
-                blockBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.toggleBlockUser(userName);
-                });
-            }
-
-            removeUserFromUI(userId) {
-                const userElement = document.getElementById('user-' + userId);
-                if (userElement) {
-                    userElement.remove();
-                }
-            }
-
-            updateUserConnection(userId, isConnected) {
-                const userElement = document.getElementById('user-' + userId);
-                if (userElement) {
-                    if (isConnected) {
-                        userElement.classList.add('connected');
-                        userElement.classList.remove('disconnected');
-                    } else {
-                        userElement.classList.add('disconnected');
-                        userElement.classList.remove('connected');
-                    }
-                }
-            }
-
-            updateUsersList(users) {
-                if (!this.isAdmin) return;
-                const usersList = document.getElementById('usersList');
-                usersList.innerHTML = '';
-                users.forEach(user => {
-                    this.addUserToUI(user.id, user.name);
-                });
-            }
-
-            updateTalkingIndicator(userId, targetUserId, isTalking) {
-                if (this.isAdmin) {
-                    const userCircle = document.getElementById('user-' + userId);
-                    if (userCircle) {
-                        if (isTalking && userId !== this.socket.id) {
-                            userCircle.classList.add('talking');
-                        } else {
-                            userCircle.classList.remove('talking');
-                        }
-                        
-                        if (isTalking && targetUserId === userId) {
-                            userCircle.classList.add('receiving');
-                        } else {
-                            userCircle.classList.remove('receiving');
-                        }
-                    }
-                } else {
-                    const adminStatus = document.getElementById('adminStatus');
-                    if (adminStatus) {
-                        adminStatus.classList.toggle('active', isTalking && userId !== this.socket.id);
-                    }
-                }
-            }
-
-            toggleBlockUser(userName) {
-                if (this.isAdmin && this.roomCode) {
-                    console.log('Toggling block for user:', userName);
-                    this.socket.emit('toggle-block-user', {
-                        roomCode: this.roomCode,
-                        userName: userName
-                    });
+            updateTalkingIndicator(userId, isTalking) {
+                const adminStatus = document.getElementById('adminStatus');
+                if (adminStatus) {
+                    adminStatus.classList.toggle('active', isTalking);
                 }
             }
 
@@ -771,15 +695,11 @@ app.get('/', (req, res) => {
                     this.localStream = null;
                 }
 
-                if (this.isAdmin) {
-                    document.getElementById('roomCode').textContent = '----';
-                    document.getElementById('usersList').innerHTML = '';
-                } else {
-                    document.getElementById('joinSection').classList.remove('hidden');
-                    document.getElementById('chatSection').classList.add('hidden');
-                    document.getElementById('talkBtn').textContent = 'Click to Talk';
-                    document.getElementById('talkBtn').classList.remove('talking');
-                }
+                document.getElementById('joinSection').classList.remove('hidden');
+                document.getElementById('chatSection').classList.add('hidden');
+                document.getElementById('talkBtn').textContent = 'Click to Talk';
+                document.getElementById('talkBtn').classList.remove('talking');
+                
                 this.roomCode = null;
                 this.userName = null;
                 localStorage.removeItem('walkieRoomCode');
@@ -837,7 +757,7 @@ app.get('/admin', (req, res) => {
             padding: 20px; 
         }
         .container { 
-            max-width: 800px; 
+            max-width: 900px; 
             margin: 0 auto; 
             background: white; 
             border-radius: 12px; 
@@ -900,30 +820,32 @@ app.get('/admin', (req, res) => {
         button:hover { background: #2980b9; }
         button:active { transform: translateY(0); }
         button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .broadcast-btn {
+            background: #e74c3c;
+            margin-left: 10px;
+        }
+        .broadcast-btn.active {
+            background: #c0392b;
+            box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
+        }
         .users-container { 
             padding: 20px; 
             border-bottom: 1px solid #ecf0f1; 
         }
         .users-grid { 
             display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); 
-            gap: 12px; 
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); 
+            gap: 16px; 
             margin-top: 12px; 
         }
         .user-circle { 
             background: #f8f9fa; 
             border: 2px solid #e9ecef; 
-            border-radius: 50%; 
+            border-radius: 12px; 
             padding: 16px; 
             text-align: center; 
             position: relative;
             transition: all 0.3s ease; 
-            width: 80px;
-            height: 80px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
             cursor: pointer;
         }
         .user-circle.connected:hover {
@@ -939,12 +861,17 @@ app.get('/admin', (req, res) => {
         .user-circle.talking { 
             border-color: #27ae60; 
             background: #d5f4e6; 
+            animation: glow-green 1s infinite; 
         }
         .user-circle.receiving { 
             border-color: #e74c3c; 
             background: #fadbd8; 
             animation: glow-red 1s infinite; 
-            box-shadow: 0 0 20px rgba(231, 76, 60, 0.5);
+        }
+        @keyframes glow-green { 
+            0% { box-shadow: 0 0 10px #27ae60; } 
+            50% { box-shadow: 0 0 20px #27ae60; } 
+            100% { box-shadow: 0 0 10px #27ae60; } 
         }
         @keyframes glow-red { 
             0% { box-shadow: 0 0 10px #e74c3c; } 
@@ -952,20 +879,20 @@ app.get('/admin', (req, res) => {
             100% { box-shadow: 0 0 10px #e74c3c; } 
         }
         .user-avatar { 
-            font-size: 16px; 
+            font-size: 20px; 
             font-weight: bold; 
             color: #2c3e50;
-            margin-bottom: 4px;
+            margin-bottom: 8px;
         }
         .user-name { 
             font-weight: 600; 
-            font-size: 11px;
+            font-size: 12px;
             color: #2c3e50;
-            margin-bottom: 4px;
+            margin-bottom: 8px;
         }
         .user-status {
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: #27ae60;
             position: absolute;
@@ -980,7 +907,7 @@ app.get('/admin', (req, res) => {
             display: flex;
             flex-direction: column;
             gap: 4px;
-            margin-top: 4px;
+            margin-top: 8px;
         }
         .block-btn { 
             padding: 4px 8px; 
@@ -1016,7 +943,7 @@ app.get('/admin', (req, res) => {
         @media (max-width: 768px) { 
             .container { margin: 10px; border-radius: 8px; } 
             .room-info { flex-direction: column; gap: 12px; } 
-            .users-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); } 
+            .users-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); } 
         }
         h2 {
             font-size: 16px;
@@ -1028,6 +955,26 @@ app.get('/admin', (req, res) => {
             font-size: 12px;
             color: #666;
             margin-top: 8px;
+        }
+        .admin-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .volume-meter {
+            width: 100%;
+            height: 4px;
+            background: #ecf0f1;
+            border-radius: 2px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .volume-level {
+            height: 100%;
+            background: #27ae60;
+            width: 0%;
+            transition: width 0.1s ease;
         }
     </style>
 </head>
@@ -1041,14 +988,21 @@ app.get('/admin', (req, res) => {
             </div>
             <div class="room-info">
                 <div>Room Code: <span id="roomCode">----</span></div>
-                <button id="createRoomBtn" disabled>Create New Room</button>
+                <div class="admin-controls">
+                    <button id="createRoomBtn" disabled>Create New Room</button>
+                    <button id="broadcastBtn" class="broadcast-btn" disabled>Broadcast to All</button>
+                </div>
             </div>
         </div>
 
         <div class="users-container">
-            <h2>Connected Users - Click on Avatar to Talk</h2>
-            <div class="connection-info">Green dot = Online • Red glow = Active transmission</div>
+            <h2>Connected Users - Click to Talk to Individual User</h2>
+            <div class="connection-info">Green glow = User talking • Red glow = You talking to user • Broadcast = Talk to all users</div>
             <div id="usersList" class="users-grid"></div>
+        </div>
+
+        <div class="volume-meter">
+            <div class="volume-level" id="volumeLevel"></div>
         </div>
 
         <div class="error-message hidden" id="errorMessage"></div>
@@ -1064,13 +1018,13 @@ app.get('/admin', (req, res) => {
                 this.isAdmin = true;
                 this.isTalking = false;
                 this.currentTalkingTo = null;
+                this.isBroadcasting = false;
                 this.localStream = null;
                 this.audioContext = null;
                 this.mediaStreamSource = null;
                 this.scriptProcessor = null;
+                this.analyser = null;
                 this.reconnectAttempts = 0;
-                this.maxReconnectAttempts = 5;
-                this.reconnectTimeout = null;
                 this.blockedUsers = new Set();
                 this.userConnections = new Map();
                 this.init();
@@ -1101,12 +1055,14 @@ app.get('/admin', (req, res) => {
                     this.reconnectAttempts = 0;
                     this.updateConnectionStatus('connected');
                     document.getElementById('createRoomBtn').disabled = false;
+                    document.getElementById('broadcastBtn').disabled = false;
                 });
 
                 this.socket.on('disconnect', (reason) => {
                     console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     document.getElementById('createRoomBtn').disabled = true;
+                    document.getElementById('broadcastBtn').disabled = true;
                 });
 
                 this.socket.on('connect_error', (error) => {
@@ -1162,7 +1118,37 @@ app.get('/admin', (req, res) => {
 
             initAdmin() {
                 document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
+                document.getElementById('broadcastBtn').addEventListener('mousedown', () => this.startBroadcasting());
+                document.getElementById('broadcastBtn').addEventListener('mouseup', () => this.stopTalking());
+                document.getElementById('broadcastBtn').addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startBroadcasting();
+                });
+                document.getElementById('broadcastBtn').addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopTalking();
+                });
                 this.testMicrophoneAccess();
+            }
+
+            async testMicrophoneAccess() {
+                try {
+                    this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                            channelCount: 1,
+                            sampleRate: 48000,
+                            sampleSize: 16,
+                            latency: 0
+                        } 
+                    });
+                    console.log('Microphone access granted');
+                } catch (error) {
+                    console.error('Microphone access denied:', error);
+                    this.showError('Microphone access is required. Please allow microphone permissions.');
+                }
             }
 
             setupSocketListeners() {
@@ -1187,7 +1173,7 @@ app.get('/admin', (req, res) => {
 
                 this.socket.on('user-talking', (data) => {
                     console.log('User talking:', data.userId, 'isTalking:', data.isTalking);
-                    this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
+                    this.updateTalkingIndicator(data.userId, data.isTalking);
                 });
 
                 this.socket.on('audio-data', (data) => {
@@ -1231,6 +1217,28 @@ app.get('/admin', (req, res) => {
                 this.socket.emit('create-room');
             }
 
+            startBroadcasting() {
+                if (!this.roomCode || !this.socket.connected) {
+                    this.showError('Not connected to room');
+                    return;
+                }
+                
+                console.log('Start broadcasting to all users');
+                this.isTalking = true;
+                this.isBroadcasting = true;
+                this.currentTalkingTo = 'all';
+                
+                document.getElementById('broadcastBtn').classList.add('active');
+                document.getElementById('broadcastBtn').textContent = 'Broadcasting...';
+
+                this.startAudioStreaming('all');
+
+                this.socket.emit('start-talking', {
+                    roomCode: this.roomCode,
+                    targetUserId: 'all'
+                });
+            }
+
             toggleTalking(targetUserId) {
                 if (!this.roomCode || !this.socket.connected) {
                     this.showError('Not connected to room');
@@ -1252,7 +1260,7 @@ app.get('/admin', (req, res) => {
                 }
             }
 
-            async startTalking(targetUserId) {
+            startTalking(targetUserId) {
                 console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
                 this.currentTalkingTo = targetUserId;
@@ -1262,11 +1270,11 @@ app.get('/admin', (req, res) => {
                     userCircle.classList.add('receiving');
                 }
 
-                await this.startAudioStreaming();
+                this.startAudioStreaming(targetUserId);
 
                 this.socket.emit('start-talking', {
-                    targetUserId: targetUserId,
-                    roomCode: this.roomCode
+                    roomCode: this.roomCode,
+                    targetUserId: targetUserId
                 });
             }
 
@@ -1274,14 +1282,21 @@ app.get('/admin', (req, res) => {
                 console.log('Stop talking');
                 this.isTalking = false;
                 
-                if (this.currentTalkingTo) {
+                if (this.currentTalkingTo && this.currentTalkingTo !== 'all') {
                     const userCircle = document.getElementById('user-' + this.currentTalkingTo);
                     if (userCircle) {
                         userCircle.classList.remove('receiving');
                     }
                 }
                 
+                if (this.isBroadcasting) {
+                    document.getElementById('broadcastBtn').classList.remove('active');
+                    document.getElementById('broadcastBtn').textContent = 'Broadcast to All';
+                    this.isBroadcasting = false;
+                }
+                
                 this.currentTalkingTo = null;
+                document.getElementById('volumeLevel').style.width = '0%';
 
                 this.stopAudioStreaming();
 
@@ -1290,7 +1305,7 @@ app.get('/admin', (req, res) => {
                 });
             }
 
-            async startAudioStreaming() {
+            async startAudioStreaming(targetUserId) {
                 try {
                     if (!this.localStream) {
                         this.localStream = await navigator.mediaDevices.getUserMedia({ 
@@ -1300,7 +1315,8 @@ app.get('/admin', (req, res) => {
                                 autoGainControl: true,
                                 channelCount: 1,
                                 sampleRate: 48000,
-                                latency: 0.01
+                                sampleSize: 16,
+                                latency: 0
                             } 
                         });
                     }
@@ -1313,22 +1329,36 @@ app.get('/admin', (req, res) => {
                     }
 
                     this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+                    
+                    // Add analyser for volume meter
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    this.mediaStreamSource.connect(this.analyser);
+                    
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
 
                     this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                         if (this.isTalking && this.socket.connected) {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
+                            // Update volume meter
+                            const rms = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
+                            const volume = Math.min(100, Math.max(0, rms * 200));
+                            document.getElementById('volumeLevel').style.width = volume + '%';
+                            
+                            // Convert to Int16Array for efficient transmission
                             const int16Data = new Int16Array(inputData.length);
                             for (let i = 0; i < inputData.length; i++) {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
+                            // Send audio data to specific user or all users
                             this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
-                                sampleRate: this.audioContext.sampleRate
+                                sampleRate: this.audioContext.sampleRate,
+                                targetUserId: targetUserId
                             });
                         }
                     };
@@ -1336,7 +1366,7 @@ app.get('/admin', (req, res) => {
                     this.mediaStreamSource.connect(this.scriptProcessor);
                     this.scriptProcessor.connect(this.audioContext.destination);
                     
-                    console.log('High-quality audio streaming started');
+                    console.log('High-quality audio streaming started to:', targetUserId);
                 } catch (error) {
                     console.error('Error starting audio streaming:', error);
                     this.showError('Could not access microphone. Please check permissions.');
@@ -1351,6 +1381,10 @@ app.get('/admin', (req, res) => {
                 if (this.mediaStreamSource) {
                     this.mediaStreamSource.disconnect();
                     this.mediaStreamSource = null;
+                }
+                if (this.analyser) {
+                    this.analyser.disconnect();
+                    this.analyser = null;
                 }
                 console.log('Audio streaming stopped');
             }
@@ -1435,10 +1469,10 @@ app.get('/admin', (req, res) => {
                 });
             }
 
-            updateTalkingIndicator(userId, targetUserId, isTalking) {
+            updateTalkingIndicator(userId, isTalking) {
                 const userCircle = document.getElementById('user-' + userId);
                 if (userCircle) {
-                    if (isTalking && userId !== this.socket.id) {
+                    if (isTalking) {
                         userCircle.classList.add('talking');
                     } else {
                         userCircle.classList.remove('talking');
@@ -1613,11 +1647,13 @@ io.on('connection', (socket) => {
 
       console.log('User started talking:', speaker.name, 'to:', targetUserId);
 
-      io.to(roomCode).emit('user-talking', {
-        userId: socket.id,
-        targetUserId: targetUserId,
-        isTalking: true
-      });
+      // Notify admin when user talks
+      if (socket.id !== room.admin) {
+        socket.to(room.admin).emit('user-talking', {
+          userId: socket.id,
+          isTalking: true
+        });
+      }
     }
   });
 
@@ -1635,24 +1671,45 @@ io.on('connection', (socket) => {
       if (speaker) {
         speaker.isTalking = false;
 
-        io.to(roomCode).emit('user-talking', {
-          userId: socket.id,
-          isTalking: false
-        });
+        // Notify admin when user stops talking
+        if (socket.id !== room.admin) {
+          socket.to(room.admin).emit('user-talking', {
+            userId: socket.id,
+            isTalking: false
+          });
+        }
       }
     }
   });
 
   // Real-time audio data streaming
   socket.on('audio-data', (data) => {
-    const { roomCode, audioBuffer, sampleRate } = data;
+    const { roomCode, audioBuffer, sampleRate, targetUserId } = data;
     
     const room = rooms.get(roomCode);
     if (room) {
-      socket.to(roomCode).volatile.emit('audio-data', {
-        audioBuffer: audioBuffer,
-        sampleRate: sampleRate
-      });
+      if (targetUserId === 'admin') {
+        // User talking to admin - send only to admin
+        socket.to(room.admin).volatile.emit('audio-data', {
+          audioBuffer: audioBuffer,
+          sampleRate: sampleRate,
+          targetUserId: socket.id
+        });
+      } else if (targetUserId === 'all') {
+        // Admin broadcasting to all users
+        socket.to(roomCode).volatile.emit('audio-data', {
+          audioBuffer: audioBuffer,
+          sampleRate: sampleRate,
+          targetUserId: 'all'
+        });
+      } else {
+        // Admin talking to specific user
+        socket.to(targetUserId).volatile.emit('audio-data', {
+          audioBuffer: audioBuffer,
+          sampleRate: sampleRate,
+          targetUserId: socket.id
+        });
+      }
     }
   });
 
@@ -1681,7 +1738,7 @@ io.on('connection', (socket) => {
           
           io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
           room.users.delete(userId);
-          socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
+          socket.emit('users-update', Array.from(room.users.values()));
         }
         
         socket.emit('user-blocked', { userName: userName });
