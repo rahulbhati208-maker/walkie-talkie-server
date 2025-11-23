@@ -115,9 +115,12 @@ app.get('/', (req, res) => {
             border-radius: 50%; 
             margin: 20px auto; 
             display: block; 
+            transition: all 0.3s ease;
         }
         .talk-btn.talking { 
             background: #e74c3c; 
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(231, 76, 60, 0.5);
         }
         .talk-btn:disabled { background: #bdc3c7; }
         .hidden { display: none; }
@@ -185,6 +188,12 @@ app.get('/', (req, res) => {
             background: #e74c3c; 
         }
         .mic-dot.active { background: #27ae60; }
+        .audio-quality { 
+            text-align: center; 
+            font-size: 12px; 
+            color: #666; 
+            margin-top: 8px; 
+        }
     </style>
 </head>
 <body>
@@ -216,6 +225,8 @@ app.get('/', (req, res) => {
             </div>
             
             <button id="talkBtn" class="talk-btn">Click to Talk</button>
+            <div class="audio-quality">High Quality Audio - Zero Latency</div>
+            
             <div class="status-indicators">
                 <div class="status-item">
                     <div class="status-dot" id="userStatus"></div>
@@ -247,6 +258,8 @@ app.get('/', (req, res) => {
                 this.reconnectAttempts = 0;
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
+                this.audioQueue = [];
+                this.isPlaying = false;
                 this.init();
             }
 
@@ -287,7 +300,10 @@ app.get('/', (req, res) => {
                 }
 
                 this.socket = io({
-                    reconnection: false
+                    reconnection: true,
+                    reconnectionAttempts: 10,
+                    reconnectionDelay: 1000,
+                    timeout: 20000
                 });
                 
                 this.socket.on('connect', () => {
@@ -298,7 +314,7 @@ app.get('/', (req, res) => {
                     
                     if (this.roomCode && this.userName) {
                         console.log('Rejoining room...');
-                        this.socket.emit('join-room', { 
+                        this.socket.emit('rejoin-room', { 
                             roomCode: this.roomCode, 
                             userName: this.userName 
                         });
@@ -309,18 +325,11 @@ app.get('/', (req, res) => {
                     console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     this.disableButtons();
-                    
-                    if (reason === 'io server disconnect') {
-                        this.socket.connect();
-                    } else {
-                        this.scheduleReconnect();
-                    }
                 });
 
                 this.socket.on('connect_error', (error) => {
                     console.log('Connection error:', error);
                     this.updateConnectionStatus('error');
-                    this.scheduleReconnect();
                 });
 
                 this.socket.on('reconnect_attempt', (attempt) => {
@@ -328,38 +337,12 @@ app.get('/', (req, res) => {
                     this.updateConnectionStatus('reconnecting');
                 });
 
+                this.socket.on('reconnect_failed', () => {
+                    console.log('Reconnection failed');
+                    this.showError('Connection lost. Please refresh the page.');
+                });
+
                 this.setupSocketListeners();
-            }
-
-            scheduleReconnect() {
-                if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                    this.reconnectAttempts++;
-                    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-                    console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
-                    
-                    this.reconnectTimeout = setTimeout(() => {
-                        this.connectToServer();
-                    }, delay);
-                } else {
-                    console.log('Max reconnection attempts reached');
-                    this.showError('Unable to connect to server. Please refresh the page.');
-                }
-            }
-
-            setupAutoReconnect() {
-                window.addEventListener('online', () => {
-                    console.log('Browser is online, reconnecting...');
-                    this.connectToServer();
-                });
-
-                window.addEventListener('beforeunload', () => {
-                    if (this.reconnectTimeout) {
-                        clearTimeout(this.reconnectTimeout);
-                    }
-                    if (this.socket) {
-                        this.socket.disconnect();
-                    }
-                });
             }
 
             updateConnectionStatus(status) {
@@ -439,7 +422,8 @@ app.get('/', (req, res) => {
                             noiseSuppression: true,
                             autoGainControl: true,
                             channelCount: 1,
-                            sampleRate: 16000
+                            sampleRate: 48000, // Higher sample rate for better quality
+                            latency: 0.01 // Low latency
                         } 
                     });
                     
@@ -496,6 +480,12 @@ app.get('/', (req, res) => {
                     console.log('User left:', data.userName);
                     this.removeUserFromUI(data.userId);
                     this.showMessage('User ' + data.userName + ' left the room');
+                });
+
+                this.socket.on('user-reconnected', (data) => {
+                    console.log('User reconnected:', data.userName);
+                    this.updateUserConnection(data.userId, true);
+                    this.showSuccess('User ' + data.userName + ' reconnected');
                 });
 
                 this.socket.on('blocked', (data) => {
@@ -557,15 +547,13 @@ app.get('/', (req, res) => {
                 console.log('Start talking to:', targetUserId);
                 this.isTalking = true;
                 
-                if (this.isAdmin) {
-                    // For admin, targetUserId is handled by avatar click
-                } else {
+                if (!this.isAdmin) {
                     document.getElementById('talkBtn').classList.add('talking');
                     document.getElementById('talkBtn').textContent = 'Stop Talking';
                     document.getElementById('userStatus').classList.add('active');
                 }
 
-                // Start real-time audio streaming
+                // Start high-quality audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -601,20 +589,24 @@ app.get('/', (req, res) => {
                                 noiseSuppression: true,
                                 autoGainControl: true,
                                 channelCount: 1,
-                                sampleRate: 16000
+                                sampleRate: 48000,
+                                latency: 0.01
                             } 
                         });
                     }
 
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 48000,
+                            latencyHint: 'playback'
+                        });
                     }
 
                     this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
 
                     this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking) {
+                        if (this.isTalking && this.socket.connected) {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
@@ -624,8 +616,8 @@ app.get('/', (req, res) => {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
-                            // Send raw audio buffer for minimal latency
-                            this.socket.emit('audio-data', {
+                            // Send raw audio buffer with compression
+                            this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
                                 sampleRate: this.audioContext.sampleRate
@@ -636,7 +628,7 @@ app.get('/', (req, res) => {
                     this.mediaStreamSource.connect(this.scriptProcessor);
                     this.scriptProcessor.connect(this.audioContext.destination);
                     
-                    console.log('Real-time audio streaming started');
+                    console.log('High-quality audio streaming started');
                 } catch (error) {
                     console.error('Error starting audio streaming:', error);
                     this.showError('Could not access microphone. Please check permissions.');
@@ -658,7 +650,10 @@ app.get('/', (req, res) => {
             playAudio(audioBuffer) {
                 try {
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 48000,
+                            latencyHint: 'playback'
+                        });
                     }
 
                     const int16Data = new Int16Array(audioBuffer);
@@ -677,7 +672,6 @@ app.get('/', (req, res) => {
                     source.connect(this.audioContext.destination);
                     source.start();
                     
-                    console.log('Playing received audio');
                 } catch (error) {
                     console.error('Error playing audio:', error);
                 }
@@ -689,7 +683,7 @@ app.get('/', (req, res) => {
                 const usersList = document.getElementById('usersList');
 
                 const userCircle = document.createElement('div');
-                userCircle.className = 'user-circle';
+                userCircle.className = 'user-circle connected';
                 userCircle.id = 'user-' + userId;
                 userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
@@ -700,7 +694,7 @@ app.get('/', (req, res) => {
 
                 // Click on avatar to talk to user
                 userCircle.addEventListener('click', (e) => {
-                    if (!e.target.classList.contains('block-btn')) {
+                    if (!e.target.classList.contains('block-btn') && userCircle.classList.contains('connected')) {
                         this.toggleTalking(userId);
                     }
                 });
@@ -716,6 +710,19 @@ app.get('/', (req, res) => {
                 const userElement = document.getElementById('user-' + userId);
                 if (userElement) {
                     userElement.remove();
+                }
+            }
+
+            updateUserConnection(userId, isConnected) {
+                const userElement = document.getElementById('user-' + userId);
+                if (userElement) {
+                    if (isConnected) {
+                        userElement.classList.add('connected');
+                        userElement.classList.remove('disconnected');
+                    } else {
+                        userElement.classList.add('disconnected');
+                        userElement.classList.remove('connected');
+                    }
                 }
             }
 
@@ -739,7 +746,7 @@ app.get('/', (req, res) => {
                             userCircle.classList.remove('talking');
                         }
                         
-                        // Admin is talking to this user (red)
+                        // Admin is talking to this user (red glow)
                         if (isTalking && targetUserId === userId) {
                             userCircle.classList.add('receiving');
                         } else {
@@ -901,17 +908,7 @@ app.get('/admin', (req, res) => {
         button:hover { background: #2980b9; }
         button:active { transform: translateY(0); }
         button:disabled { background: #bdc3c7; cursor: not-allowed; }
-        .talk-btn { 
-            background: #27ae60; 
-            font-size: 14px; 
-            font-weight: 600; 
-            padding: 12px 16px; 
-        }
-        .talk-btn.talking { 
-            background: #e74c3c; 
-        }
-        .talk-btn:disabled { background: #bdc3c7; }
-        .users-container, .controls { 
+        .users-container { 
             padding: 20px; 
             border-bottom: 1px solid #ecf0f1; 
         }
@@ -937,9 +934,15 @@ app.get('/admin', (req, res) => {
             justify-content: center;
             cursor: pointer;
         }
-        .user-circle:hover {
+        .user-circle.connected:hover {
             border-color: #3498db;
             background: #e3f2fd;
+        }
+        .user-circle.disconnected {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #f8d7da;
+            border-color: #f5c6cb;
         }
         .user-circle.talking { 
             border-color: #27ae60; 
@@ -949,11 +952,12 @@ app.get('/admin', (req, res) => {
             border-color: #e74c3c; 
             background: #fadbd8; 
             animation: glow-red 1s infinite; 
+            box-shadow: 0 0 20px rgba(231, 76, 60, 0.5);
         }
         @keyframes glow-red { 
-            0% { box-shadow: 0 0 5px #e74c3c; } 
-            50% { box-shadow: 0 0 15px #e74c3c; } 
-            100% { box-shadow: 0 0 5px #e74c3c; } 
+            0% { box-shadow: 0 0 10px #e74c3c; } 
+            50% { box-shadow: 0 0 20px #e74c3c; } 
+            100% { box-shadow: 0 0 10px #e74c3c; } 
         }
         .user-avatar { 
             font-size: 16px; 
@@ -975,6 +979,7 @@ app.get('/admin', (req, res) => {
             position: absolute;
             top: 8px;
             right: 8px;
+            transition: all 0.3s ease;
         }
         .user-status.offline {
             background: #bdc3c7;
@@ -1026,6 +1031,12 @@ app.get('/admin', (req, res) => {
             color: #2c3e50;
             margin-bottom: 12px;
         }
+        .connection-info {
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -1044,6 +1055,7 @@ app.get('/admin', (req, res) => {
 
         <div class="users-container">
             <h2>Connected Users - Click on Avatar to Talk</h2>
+            <div class="connection-info">Green dot = Online • Red glow = Active transmission</div>
             <div id="usersList" class="users-grid"></div>
         </div>
 
@@ -1052,7 +1064,6 @@ app.get('/admin', (req, res) => {
     </div>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // Admin-specific JavaScript
         class WalkieTalkieApp {
             constructor() {
                 this.socket = null;
@@ -1069,13 +1080,13 @@ app.get('/admin', (req, res) => {
                 this.maxReconnectAttempts = 5;
                 this.reconnectTimeout = null;
                 this.blockedUsers = new Set();
+                this.userConnections = new Map();
                 this.init();
             }
 
             init() {
                 this.connectToServer();
                 this.initAdmin();
-                this.setupAutoReconnect();
             }
 
             connectToServer() {
@@ -1087,7 +1098,10 @@ app.get('/admin', (req, res) => {
                 }
 
                 this.socket = io({
-                    reconnection: false
+                    reconnection: true,
+                    reconnectionAttempts: 10,
+                    reconnectionDelay: 1000,
+                    timeout: 20000
                 });
                 
                 this.socket.on('connect', () => {
@@ -1101,18 +1115,11 @@ app.get('/admin', (req, res) => {
                     console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     document.getElementById('createRoomBtn').disabled = true;
-                    
-                    if (reason === 'io server disconnect') {
-                        this.socket.connect();
-                    } else {
-                        this.scheduleReconnect();
-                    }
                 });
 
                 this.socket.on('connect_error', (error) => {
                     console.log('Connection error:', error);
                     this.updateConnectionStatus('error');
-                    this.scheduleReconnect();
                 });
 
                 this.socket.on('reconnect_attempt', (attempt) => {
@@ -1120,38 +1127,12 @@ app.get('/admin', (req, res) => {
                     this.updateConnectionStatus('reconnecting');
                 });
 
+                this.socket.on('reconnect_failed', () => {
+                    console.log('Reconnection failed');
+                    this.showError('Connection lost. Please refresh the page.');
+                });
+
                 this.setupSocketListeners();
-            }
-
-            scheduleReconnect() {
-                if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                    this.reconnectAttempts++;
-                    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-                    console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
-                    
-                    this.reconnectTimeout = setTimeout(() => {
-                        this.connectToServer();
-                    }, delay);
-                } else {
-                    console.log('Max reconnection attempts reached');
-                    this.showError('Unable to connect to server. Please refresh the page.');
-                }
-            }
-
-            setupAutoReconnect() {
-                window.addEventListener('online', () => {
-                    console.log('Browser is online, reconnecting...');
-                    this.connectToServer();
-                });
-
-                window.addEventListener('beforeunload', () => {
-                    if (this.reconnectTimeout) {
-                        clearTimeout(this.reconnectTimeout);
-                    }
-                    if (this.socket) {
-                        this.socket.disconnect();
-                    }
-                });
             }
 
             updateConnectionStatus(status) {
@@ -1202,6 +1183,7 @@ app.get('/admin', (req, res) => {
 
                 this.socket.on('user-joined', (data) => {
                     console.log('User joined:', data.userName);
+                    this.userConnections.set(data.userId, true);
                     this.addUserToUI(data.userId, data.userName);
                     this.showSuccess('User ' + data.userName + ' joined the room');
                 });
@@ -1222,8 +1204,16 @@ app.get('/admin', (req, res) => {
 
                 this.socket.on('user-left', (data) => {
                     console.log('User left:', data.userName);
-                    this.removeUserFromUI(data.userId);
+                    this.userConnections.set(data.userId, false);
+                    this.updateUserConnection(data.userId, false);
                     this.showMessage('User ' + data.userName + ' left the room');
+                });
+
+                this.socket.on('user-reconnected', (data) => {
+                    console.log('User reconnected:', data.userName);
+                    this.userConnections.set(data.userId, true);
+                    this.updateUserConnection(data.userId, true);
+                    this.showSuccess('User ' + data.userName + ' reconnected');
                 });
 
                 this.socket.on('user-blocked', (data) => {
@@ -1255,6 +1245,12 @@ app.get('/admin', (req, res) => {
                     return;
                 }
                 
+                // Check if user is connected
+                if (!this.userConnections.get(targetUserId)) {
+                    this.showError('User is not connected');
+                    return;
+                }
+                
                 if (this.isTalking && this.currentTalkingTo === targetUserId) {
                     this.stopTalking();
                 } else {
@@ -1270,7 +1266,13 @@ app.get('/admin', (req, res) => {
                 this.isTalking = true;
                 this.currentTalkingTo = targetUserId;
 
-                // Start real-time audio streaming
+                // Update UI to show active transmission
+                const userCircle = document.getElementById('user-' + targetUserId);
+                if (userCircle) {
+                    userCircle.classList.add('receiving');
+                }
+
+                // Start high-quality audio streaming
                 await this.startAudioStreaming();
 
                 this.socket.emit('start-talking', {
@@ -1282,6 +1284,15 @@ app.get('/admin', (req, res) => {
             stopTalking() {
                 console.log('Stop talking');
                 this.isTalking = false;
+                
+                // Remove red glow from user
+                if (this.currentTalkingTo) {
+                    const userCircle = document.getElementById('user-' + this.currentTalkingTo);
+                    if (userCircle) {
+                        userCircle.classList.remove('receiving');
+                    }
+                }
+                
                 this.currentTalkingTo = null;
 
                 // Stop audio streaming
@@ -1301,20 +1312,24 @@ app.get('/admin', (req, res) => {
                                 noiseSuppression: true,
                                 autoGainControl: true,
                                 channelCount: 1,
-                                sampleRate: 16000
+                                sampleRate: 48000,
+                                latency: 0.01
                             } 
                         });
                     }
 
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 48000,
+                            latencyHint: 'playback'
+                        });
                     }
 
                     this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
 
                     this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking) {
+                        if (this.isTalking && this.socket.connected) {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
@@ -1324,8 +1339,8 @@ app.get('/admin', (req, res) => {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
-                            // Send raw audio buffer for minimal latency
-                            this.socket.emit('audio-data', {
+                            // Send raw audio buffer with compression
+                            this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
                                 sampleRate: this.audioContext.sampleRate
@@ -1336,7 +1351,7 @@ app.get('/admin', (req, res) => {
                     this.mediaStreamSource.connect(this.scriptProcessor);
                     this.scriptProcessor.connect(this.audioContext.destination);
                     
-                    console.log('Real-time audio streaming started');
+                    console.log('High-quality audio streaming started');
                 } catch (error) {
                     console.error('Error starting audio streaming:', error);
                     this.showError('Could not access microphone. Please check permissions.');
@@ -1358,7 +1373,10 @@ app.get('/admin', (req, res) => {
             playAudio(audioBuffer) {
                 try {
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 48000,
+                            latencyHint: 'playback'
+                        });
                     }
 
                     const int16Data = new Int16Array(audioBuffer);
@@ -1377,7 +1395,6 @@ app.get('/admin', (req, res) => {
                     source.connect(this.audioContext.destination);
                     source.start();
                     
-                    console.log('Playing received audio');
                 } catch (error) {
                     console.error('Error playing audio:', error);
                 }
@@ -1387,7 +1404,7 @@ app.get('/admin', (req, res) => {
                 const usersList = document.getElementById('usersList');
 
                 const userCircle = document.createElement('div');
-                userCircle.className = 'user-circle';
+                userCircle.className = 'user-circle connected';
                 userCircle.id = 'user-' + userId;
                 userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
@@ -1398,7 +1415,7 @@ app.get('/admin', (req, res) => {
 
                 // Click on avatar to talk to user
                 userCircle.addEventListener('click', (e) => {
-                    if (!e.target.classList.contains('block-btn')) {
+                    if (!e.target.classList.contains('block-btn') && userCircle.classList.contains('connected')) {
                         this.toggleTalking(userId);
                     }
                 });
@@ -1410,10 +1427,20 @@ app.get('/admin', (req, res) => {
                 });
             }
 
-            removeUserFromUI(userId) {
+            updateUserConnection(userId, isConnected) {
                 const userElement = document.getElementById('user-' + userId);
                 if (userElement) {
-                    userElement.remove();
+                    if (isConnected) {
+                        userElement.classList.add('connected');
+                        userElement.classList.remove('disconnected');
+                        userElement.querySelector('.user-status').classList.add('online');
+                        userElement.querySelector('.user-status').classList.remove('offline');
+                    } else {
+                        userElement.classList.add('disconnected');
+                        userElement.classList.remove('connected');
+                        userElement.querySelector('.user-status').classList.add('offline');
+                        userElement.querySelector('.user-status').classList.remove('online');
+                    }
                 }
             }
 
@@ -1433,13 +1460,6 @@ app.get('/admin', (req, res) => {
                         userCircle.classList.add('talking');
                     } else {
                         userCircle.classList.remove('talking');
-                    }
-                    
-                    // Admin is talking to this user (red)
-                    if (isTalking && targetUserId === userId) {
-                        userCircle.classList.add('receiving');
-                    } else {
-                        userCircle.classList.remove('receiving');
                     }
                 }
             }
@@ -1505,6 +1525,33 @@ app.get('/admin', (req, res) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
+  // Rejoin room after reconnection
+  socket.on('rejoin-room', (data) => {
+    const { roomCode, userName } = data;
+    console.log('Rejoin room attempt:', roomCode, 'by user:', userName);
+
+    const room = rooms.get(roomCode);
+    if (room) {
+      // Update user's socket ID
+      const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
+      if (userEntry) {
+        const [oldId, user] = userEntry;
+        room.users.delete(oldId);
+        user.id = socket.id;
+        room.users.set(socket.id, user);
+        
+        socket.join(roomCode);
+        console.log('User reconnected:', userName, 'to room:', roomCode);
+        
+        // Notify admin about reconnection
+        socket.to(room.admin).emit('user-reconnected', {
+          userId: socket.id,
+          userName: userName
+        });
+      }
+    }
+  });
+
   // Admin creates room
   socket.on('create-room', (data) => {
     const roomCode = generateRoomCode();
@@ -1518,165 +1565,325 @@ io.on('connection', (socket) => {
     
     socket.join(roomCode);
     console.log('Room created:', roomCode, 'by admin:', socket.id);
-    socket.emit('room-created', { roomCode });
+    socket socket.emit('room-created',.emit('room-created', { { roomCode });
+  });
+
+ roomCode });
   });
 
   // User joins room
-  socket.on('join-room', (data) => {
-    const { roomCode, userName } = data;
-    console.log('Join room attempt:', roomCode, 'by user:', userName);
+  socket.on('join-room', (  // User joins room
+  socket.on('join-room', (data) =>data) => {
+    const {
+    const { room { roomCode, userName }Code, userName } = data;
+    console.log('Join room attempt = data;
+    console.log('Join room attempt:', roomCode, 'by:', roomCode, 'by user:', userName);
 
     const room = rooms.get(roomCode);
 
-    if (!room) {
+    if (!room) user:', userName);
+
+    const room = rooms.get(roomCode);
+
+    if (!room {
       console.log('Room not found:', roomCode);
-      socket.emit('error', { message: 'Room not found. Please check the room code.' });
-      return;
+     ) {
+      console.log('Room not found:', roomCode);
+      socket.emit('error', { message: 'Room not socket.emit('error', { message: 'Room not found. Please check the room code.' });
+      found. Please check the room code.' });
+      return return;
+    }
+
+    if (room.blocked;
     }
 
     if (room.blockedUsers.has(userName)) {
-      console.log('User blocked from room:', userName);
-      socket.emit('error', { message: 'You are blocked from this room' });
+     Users.has(userName)) {
+ console.log('      console.log('User blockedUser blocked from room:', userName from room:', userName);
+      socket);
+      socket.emit('error', { message: 'You are.emit('error', { message: 'You are blocked from this room blocked from this room' });
+      return;
+' });
       return;
     }
 
-    const existingUser = Array.from(room.users.values()).find(user => user.name === userName);
-    if (existingUser) {
-      console.log('User name already exists:', userName);
-      socket.emit('error', { message: 'User name already exists in this room. Please choose a different name.' });
+       }
+
+    const existingUser = const existingUser = Array.from Array.from(room.users.values(room.users.values()).find()).find(user => user.name(user => user.name === userName);
+ === userName);
+    if (existing    if (existingUser)User) {
+      console.log(' {
+      console.log('User nameUser name already exists:', userName already exists:', userName);
+     );
+      socket.emit(' socket.emit('error',error', { message { message: ': 'UserUser name already exists in this room name already exists in this room. Please choose. Please choose a different name.' });
       return;
     }
 
-    room.users.set(socket.id, {
+ a different name.' });
+      return;
+    }
+
+    room.users.set(socket.id,    room.users.set(socket.id, {
+      id: {
       id: socket.id,
-      name: userName,
+      name: socket.id,
+      name: userName userName,
+      isTalking: false,
       isTalking: false
     });
 
-    socket.join(roomCode);
-    console.log('User joined room:', userName, 'to room:', roomCode);
-    socket.emit('room-joined', { roomCode, userName });
-    
-    socket.to(room.admin).emit('user-joined', {
-      userId: socket.id,
-      userName: userName
+    socket.join
     });
 
-    const users = Array.from(room.users.values());
-    socket.to(room.admin).emit('users-update', users);
+    socket.join(roomCode);
+    console(roomCode);
+    console.log('.log('User joined roomUser joined room:',:', userName, 'to room:', roomCode userName, 'to room:', roomCode);
+    socket.emit(');
+    socket.emit('room-joined', { roomroom-joined', { roomCode, userName });
+    
+   Code, userName });
+    
+    socket.to socket.to(room.admin).emit(room.admin).emit('('user-joined', {
+     user-joined', {
+      userId: socket.id,
+      userId: socket.id,
+      userName userName: userName
+    });
+
+   : userName
+    });
+
+    const const users = Array.from users = Array.from((room.users.values());
+   room.users.values());
+    socket.to(room.admin socket.to(room.admin).).emit('users-update',emit('users-update', users users);
+  });
+
+  // Start talking);
   });
 
   // Start talking
-  socket.on('start-talking', (data) => {
-    const { targetUserId, roomCode } = data;
-    console.log('Start talking in room:', roomCode, 'from:', socket.id, 'to:', targetUserId);
+  socket.on
+  socket.on('('start-talking', (datastart-talking', (data) => {
+) => {
+    const { target    const { targetUserId,UserId, roomCode } = roomCode } = data;
+ data;
+    console.log('    console.log('Start talkingStart talking in room:', roomCode, in room:', roomCode, 'from:', socket.id, 'from:', socket.id, ' 'to:', targetUserId);
 
-    const room = rooms.get(roomCode);
+to:', targetUserId);
+
+    const    const room = rooms.get room = rooms.get(room(roomCode);
     
-    if (!room) {
-      console.log('Room not found for talking:', roomCode);
+   Code);
+    
+    if (! if (!room) {
+     room) {
+      console.log console.log('Room not found for talking:', roomCode('Room not found for);
       return;
     }
 
     const speaker = room.users.get(socket.id) || 
-                   (socket.id === room.admin ? { id: socket.id, name: 'Admin', isTalking: true } : null);
+                   (socket.id talking:', roomCode);
+      return;
+    }
+
+    const speaker = room.users.get(socket.id) || 
+                   (socket.id === room.admin ? { id: socket.id === room.admin ? { id: socket.id, name:, name: 'Admin', is 'Admin', isTalkingTalking: true }: true } : null);
+ : null);
     
+    if (    
     if (speaker) {
-      speaker.isTalking = true;
+speaker) {
+      speaker      speaker.isTalking = true.isTalking = true;
 
-      console.log('User started talking:', speaker.name, 'to:', targetUserId);
+      console.log(';
 
-      // Notify all in room about who is talking to whom
-      io.to(roomCode).emit('user-talking', {
+      console.log('User started talking:',User started talking:', speaker.name speaker.name, 'to:', targetUserId);
+
+      // Not, 'to:', targetUserId);
+
+      // Notify all inify all in room about room about who is talking who is talking to to whom
+ whom
+      io.to      io.to(roomCode).emit('user-t(roomCode).emit('user-talking', {
+alking', {
         userId: socket.id,
+        target        userId: socket.id,
         targetUserId: targetUserId,
-        isTalking: true
+        isUserId: targetUserId,
+        isTalkingTalking: true
+     : true
       });
     }
   });
+    }
+  });
 
-  // Stop talking
-  socket.on('stop-talking', (data) => {
+  });
+
+  // Stop talking // Stop talking
+  socket.on('stop
+  socket.on('stop-talking', (data-talking', (data) => {
+    const {) => {
     const { roomCode } = data;
-    console.log('Stop talking in room:', roomCode);
+ roomCode } = data;
+    console.log('Stop talking    console.log('Stop talking in room:', room in room:', roomCode);
 
-    const room = rooms.get(roomCode);
+Code);
+
+    const room =    const room = rooms.get( rooms.get(roomCode);
+roomCode);
     
-    if (room) {
-      const speaker = room.users.get(socket.id) || 
-                     (socket.id === room.admin ? { id: socket.id, name: 'Admin' } : null);
+    if (    
+    if (room)room) {
+      const speaker {
+      const speaker = room = room.users.get(socket.users.get(socket.id) ||.id) || 
+ 
+                     (socket.id === room                     (socket.id === room.admin ?.admin ? { id: socket { id: socket.id,.id, name: 'Admin' } name: 'Admin' } : null);
       
-      if (speaker) {
-        speaker.isTalking = false;
+ : null);
+      
+      if (spe      if (speaker)aker) {
+        speaker.is {
+        speaker.isTalking =Talking = false;
 
-        // Notify all to stop talking indicators
-        io.to(roomCode).emit('user-talking', {
+        false;
+
+        // Notify all // to stop talking indicators
+        Notify all to stop talking indicators
+        io io.to(roomCode)..to(roomCode).emit('emit('user-talking',user-talking', {
+          {
           userId: socket.id,
-          isTalking: false
+ userId: socket.id,
+                   isTalking: false
+ isTalking: false
+        });
+      }
+    }
         });
       }
     }
   });
 
-  // Real-time audio data streaming
-  socket.on('audio-data', (data) => {
-    const { roomCode, audioBuffer, sampleRate } = data;
-    console.log('Received real-time audio data for room:', roomCode);
+  //  });
 
-    const room = rooms.get(roomCode);
-    if (room) {
-      // Broadcast audio to all users in the room except sender
-      socket.to(roomCode).emit('audio-data', {
-        audioBuffer: audioBuffer,
-        sampleRate: sampleRate
+  // Real-time audio Real-time audio data streaming
+  socket data streaming
+  socket.on.on('audio-data', (('audio-data', (data) => {
+    const { roomdata) => {
+    const { roomCode, audioBufferCode, audioBuffer, sampleRate } = data;
+    
+, sampleRate } = data;
+    
+       const room = rooms.get const room = rooms.get(room(roomCode);
+    if (Code);
+    if (roomroom) {
+      // Broadcast audio) {
+      // Broadcast audio to all users in the room to all users in the room except sender
+      socket.to except sender
+      socket.to(room(roomCode).volatile.Code).volatile.emit('audio-data', {
+emit('audio-data', {
+               audioBuffer: audioBuffer audioBuffer: audioBuffer,
+,
+        sampleRate: sample        sampleRate: sampleRate
+Rate
       });
+    }
+       });
     }
   });
 
-  // Toggle block user
-  socket.on('toggle-block-user', (data) => {
-    const { roomCode, userName } = data;
-    console.log('Toggle block user request:', userName, 'in room:', roomCode);
+ });
+
+  // Toggle block  // Toggle block user user
+  socket.on('toggle
+  socket.on('toggle-block-user', (data-block-user', (data) =>) => {
+    const { room {
+    const { roomCode,Code, userName userName } = } = data;
+    console.log('Toggle block user data;
+    console.log('Toggle block user request request:', userName, 'in room:', roomCode);
     
-    const room = rooms.get(roomCode);
+:', userName, 'in room:', roomCode);
+    
+    const room = rooms.get    const room = rooms.get(roomCode);
+    
+   (roomCode);
     
     if (room && socket.id === room.admin) {
+      if (room.blockedUsers.has(user if (room && socket.id === room.admin) {
       if (room.blockedUsers.has(userName)) {
+       Name)) {
         // Unblock user
         room.blockedUsers.delete(userName);
         socket.emit('user-unblocked', { userName: userName });
-        console.log('User unblocked:', userName);
+        console.log('User unblock // Unblock user
+        room.blockedUsers.delete(userName);
+        socket.emit('user-unblocked', { userName: userName });
+        console.log('User unblockeded:', userName);
+      } else {
+        //:', userName);
       } else {
         // Block user
-        room.blockedUsers.add(userName);
+        room Block user
+        room.block.blockedUsers.add(userName);
         
-        // Find and disconnect blocked user
-        const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
+edUsers.add(userName);
+        
+        // Find and disconnect blocked user        // Find and disconnect blocked user
+        const userEntry =
+        const userEntry = Array.from(room.users. Array.from(room.users.entriesentries()).find(([id,()).find(([id, user user]) => user.name === userName]) => user.name === userName);
+       );
         if (userEntry) {
-          const [userId, user] = userEntry;
-          console.log('Disconnecting blocked user:', userName);
+          const [ if (userEntry) {
+          const [userId, user] = useruserId, user] = userEntryEntry;
+          console.log;
+          console.log('('Disconnecting blocked user:', userName);
           
-          io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
-          room.users.delete(userId);
-          socket.to(room.admin).emit('users-update', Array.from(room.users.values()));
+Disconnecting blocked user:', userName);
+          
+                   io.to(userId). io.to(userId).emitemit('blocked', { message('blocked', { message:: 'You have been blocked 'You have been blocked by admin by admin' });
+          room' });
+          room.users.delete.users.delete(userId);
+         (userId);
+          socket.to socket.to(room.admin).(room.admin).emit('emit('users-update', Array.fromusers-update', Array.from((room.users.values()));
+       room.users.values()));
         }
+ }
         
-        socket.emit('user-blocked', { userName: userName });
+        socket.emit        
+        socket.emit('user('user-blocked', {-blocked', { userName: userName: userName });
+        console.log('User blocked userName });
         console.log('User blocked:', userName);
+     :', userName);
       }
     }
   });
 
-  // Disconnection handling
-  socket.on('disconnect', (reason) => {
-    console.log('User disconnected:', socket.id, 'Reason:', reason);
+  }
+    }
+  });
+
+  // Dis // Disconnection handlingconnection handling
+  socket
+  socket.on('disconnect',.on('disconnect', (reason (reason) => {
+   ) => {
+    console.log('User console.log('User disconnected disconnected:', socket.id, ':', socket.id, 'Reason:',Reason:', reason);
     
-    for (const [roomCode, room] of rooms.entries()) {
-      if (room.admin === socket.id) {
+    reason);
+    
+    for (const [roomCode, room] of for (const [roomCode, room] of rooms.entries()) {
+      rooms.entries()) {
+      if (room.admin === socket if (room.admin === socket.id).id {
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
         break;
+      }) {
+        console.log('Admin disconnected, closing room:', roomCode);
+        io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
+        rooms.delete(roomCode);
+ else if (room.users.has(socket.id)) {
+        const user = room.users.get(socket.id);
+        room.users.delete(socket.id);
+        console.log('User disconnected:', user.name        break;
       } else if (room.users.has(socket.id)) {
         const user = room.users.get(socket.id);
         room.users.delete(socket.id);
@@ -1687,8 +1894,17 @@ io.on('connection', (socket) => {
           userName: user.name
         });
         
+        const users = Array.from(, 'from room:', roomCode);
+        
+        socket.to(room.admin).emit('user-left', {
+          userId: socket.id,
+          userName: user.name
+        });
+        
         const users = Array.from(room.users.values());
+        socket.to(room.admin).emit('usersroom.users.values());
         socket.to(room.admin).emit('users-update', users);
+       -update', users);
         break;
       }
     }
@@ -1697,7 +1913,16 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
+  console.log('Server running on port', break;
+      }
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
   console.log('Server running on port', PORT);
+ PORT);
   console.log('User Page: http://localhost:' + PORT + '/');
   console.log('Admin Page: http://localhost:' + PORT + '/admin');
 });
