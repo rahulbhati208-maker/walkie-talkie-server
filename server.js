@@ -17,6 +17,7 @@ app.use(express.json());
 
 // Store rooms and users
 const rooms = new Map();
+const peerConnections = new Map();
 
 // Generate 4-digit room code
 function generateRoomCode() {
@@ -208,6 +209,12 @@ app.get('/', (req, res) => {
             width: 0%;
             transition: width 0.1s ease;
         }
+        .audio-stats {
+            text-align: center;
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -242,8 +249,9 @@ app.get('/', (req, res) => {
                 <div class="volume-level" id="volumeLevel"></div>
             </div>
             
-            <button id="talkBtn" class="talk-btn">Click to Talk</button>
-            <div class="audio-quality">Crystal Clear Audio - Zero Latency</div>
+            <button id="talkBtn" class="talk-btn">Push to Talk</button>
+            <div class="audio-quality">VoIP Quality - Live Audio Stream</div>
+            <div class="audio-stats" id="audioStats">Audio: Disconnected</div>
             
             <div class="status-indicators">
                 <div class="status-item">
@@ -270,13 +278,13 @@ app.get('/', (req, res) => {
                 this.isAdmin = false;
                 this.isTalking = false;
                 this.localStream = null;
+                this.peerConnection = null;
                 this.audioContext = null;
-                this.mediaStreamSource = null;
-                this.scriptProcessor = null;
                 this.analyser = null;
+                this.mediaRecorder = null;
+                this.audioChunks = [];
                 this.reconnectAttempts = 0;
-                this.audioQueue = [];
-                this.isPlaying = false;
+                this.audioElement = new Audio();
                 this.init();
             }
 
@@ -341,6 +349,7 @@ app.get('/', (req, res) => {
                     console.log('Disconnected from server:', reason);
                     this.updateConnectionStatus('disconnected');
                     this.disableButtons();
+                    this.closeAudioConnection();
                 });
 
                 this.socket.on('connect_error', (error) => {
@@ -431,11 +440,12 @@ app.get('/', (req, res) => {
                     if (e.key === 'Enter') this.joinRoom();
                 });
 
-                this.testMicrophoneAccess();
+                this.initializeAudio();
             }
 
-            async testMicrophoneAccess() {
+            async initializeAudio() {
                 try {
+                    // Get microphone access
                     this.localStream = await navigator.mediaDevices.getUserMedia({ 
                         audio: {
                             echoCancellation: true,
@@ -445,14 +455,56 @@ app.get('/', (req, res) => {
                             sampleRate: 48000,
                             sampleSize: 16,
                             latency: 0
-                        } 
+                        },
+                        video: false
                     });
+                    
+                    // Setup audio context for volume monitoring
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 48000,
+                        latencyHint: 'playback'
+                    });
+                    
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    const source = this.audioContext.createMediaStreamSource(this.localStream);
+                    source.connect(this.analyser);
+                    
+                    // Start volume monitoring
+                    this.monitorVolume();
                     
                     document.getElementById('micIndicator').classList.add('active');
                     console.log('Microphone access granted');
                 } catch (error) {
                     console.error('Microphone access denied:', error);
                     this.showError('Microphone access is required. Please allow microphone permissions.');
+                }
+            }
+
+            monitorVolume() {
+                if (!this.analyser) return;
+                
+                const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                
+                const checkVolume = () => {
+                    this.analyser.getByteFrequencyData(dataArray);
+                    
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        sum += dataArray[i];
+                    }
+                    const average = sum / dataArray.length;
+                    const volume = Math.min(100, (average / 255) * 200);
+                    
+                    document.getElementById('volumeLevel').style.width = volume + '%';
+                    
+                    if (this.isTalking) {
+                        requestAnimationFrame(checkVolume);
+                    }
+                };
+                
+                if (this.isTalking) {
+                    checkVolume();
                 }
             }
 
@@ -467,6 +519,9 @@ app.get('/', (req, res) => {
                     document.getElementById('chatSection').classList.remove('hidden');
                     this.saveToLocalStorage();
                     this.showSuccess('Successfully joined room: ' + data.roomCode);
+                    
+                    // Initialize WebRTC connection
+                    this.initializeWebRTC();
                 });
 
                 this.socket.on('user-talking', (data) => {
@@ -474,20 +529,25 @@ app.get('/', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.isTalking);
                 });
 
-                this.socket.on('audio-data', (data) => {
-                    if (data.targetUserId === 'all' || data.targetUserId === this.socket.id) {
-                        this.playAudio(data.audioBuffer);
-                    }
+                this.socket.on('audio-stream-started', (data) => {
+                    console.log('Audio stream started from:', data.userId);
+                    document.getElementById('audioStats').textContent = 'Audio: Live Connected';
+                    document.getElementById('audioStats').style.color = '#27ae60';
+                });
+
+                this.socket.on('audio-stream-stopped', (data) => {
+                    console.log('Audio stream stopped from:', data.userId);
+                    document.getElementById('audioStats').textContent = 'Audio: Ready';
+                    document.getElementById('audioStats').style.color = '#666';
+                });
+
+                this.socket.on('webrtc-signal', async (data) => {
+                    await this.handleWebRTCSignal(data);
                 });
 
                 this.socket.on('user-left', (data) => {
                     console.log('User left:', data.userName);
                     this.showMessage('User ' + data.userName + ' left the room');
-                });
-
-                this.socket.on('user-reconnected', (data) => {
-                    console.log('User reconnected:', data.userName);
-                    this.showSuccess('User ' + data.userName + ' reconnected');
                 });
 
                 this.socket.on('blocked', (data) => {
@@ -506,6 +566,99 @@ app.get('/', (req, res) => {
                     console.log('Error:', data.message);
                     this.showError(data.message);
                 });
+            }
+
+            async initializeWebRTC() {
+                try {
+                    if (!this.localStream) {
+                        await this.initializeAudio();
+                    }
+
+                    // Create peer connection with optimized settings for voice
+                    const configuration = {
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:stun1.l.google.com:19302' }
+                        ],
+                        sdpSemantics: 'unified-plan'
+                    };
+
+                    this.peerConnection = new RTCPeerConnection(configuration);
+
+                    // Add local stream
+                    this.localStream.getTracks().forEach(track => {
+                        this.peerConnection.addTrack(track, this.localStream);
+                    });
+
+                    // Handle incoming audio
+                    this.peerConnection.ontrack = (event) => {
+                        console.log('Received remote audio stream');
+                        const [remoteStream] = event.streams;
+                        this.audioElement.srcObject = remoteStream;
+                        this.audioElement.play().catch(e => console.log('Audio play error:', e));
+                    };
+
+                    // Handle ICE candidates
+                    this.peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            this.socket.emit('webrtc-signal', {
+                                roomCode: this.roomCode,
+                                target: 'admin',
+                                candidate: event.candidate
+                            });
+                        }
+                    };
+
+                    // Handle connection state
+                    this.peerConnection.onconnectionstatechange = () => {
+                        console.log('WebRTC connection state:', this.peerConnection.connectionState);
+                        document.getElementById('audioStats').textContent = 
+                            `Audio: ${this.peerConnection.connectionState.charAt(0).toUpperCase() + this.peerConnection.connectionState.slice(1)}`;
+                    };
+
+                    // Create offer for admin
+                    if (!this.isAdmin) {
+                        const offer = await this.peerConnection.createOffer({
+                            offerToReceiveAudio: true,
+                            offerToReceiveVideo: false
+                        });
+                        await this.peerConnection.setLocalDescription(offer);
+                        
+                        this.socket.emit('webrtc-signal', {
+                            roomCode: this.roomCode,
+                            target: 'admin',
+                            offer: offer
+                        });
+                    }
+
+                } catch (error) {
+                    console.error('WebRTC initialization error:', error);
+                    this.showError('Failed to initialize audio connection');
+                }
+            }
+
+            async handleWebRTCSignal(data) {
+                if (!this.peerConnection) return;
+
+                try {
+                    if (data.offer) {
+                        await this.peerConnection.setRemoteDescription(data.offer);
+                        const answer = await this.peerConnection.createAnswer();
+                        await this.peerConnection.setLocalDescription(answer);
+                        
+                        this.socket.emit('webrtc-signal', {
+                            roomCode: this.roomCode,
+                            target: data.from,
+                            answer: answer
+                        });
+                    } else if (data.answer) {
+                        await this.peerConnection.setRemoteDescription(data.answer);
+                    } else if (data.candidate) {
+                        await this.peerConnection.addIceCandidate(data.candidate);
+                    }
+                } catch (error) {
+                    console.error('WebRTC signal handling error:', error);
+                }
             }
 
             joinRoom() {
@@ -537,10 +690,17 @@ app.get('/', (req, res) => {
                 this.isTalking = true;
                 
                 document.getElementById('talkBtn').classList.add('talking');
-                document.getElementById('talkBtn').textContent = 'Release to Stop';
+                document.getElementById('talkBtn').textContent = 'Talking...';
                 document.getElementById('userStatus').classList.add('active');
 
-                this.startAudioStreaming();
+                // Enable audio tracks for transmission
+                if (this.localStream) {
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = true;
+                    });
+                }
+
+                this.monitorVolume();
 
                 this.socket.emit('start-talking', {
                     roomCode: this.roomCode,
@@ -555,129 +715,32 @@ app.get('/', (req, res) => {
                 this.isTalking = false;
                 
                 document.getElementById('talkBtn').classList.remove('talking');
-                document.getElementById('talkBtn').textContent = 'Click to Talk';
+                document.getElementById('talkBtn').textContent = 'Push to Talk';
                 document.getElementById('userStatus').classList.remove('active');
                 document.getElementById('volumeLevel').style.width = '0%';
 
-                this.stopAudioStreaming();
+                // Disable audio tracks to stop transmission
+                if (this.localStream) {
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = false;
+                    });
+                }
 
                 this.socket.emit('stop-talking', {
                     roomCode: this.roomCode
                 });
             }
 
-            async startAudioStreaming() {
-                try {
-                    if (!this.localStream) {
-                        this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                channelCount: 1,
-                                sampleRate: 48000,
-                                sampleSize: 16,
-                                latency: 0
-                            } 
-                        });
-                    }
-
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 48000,
-                            latencyHint: 'playback'
-                        });
-                    }
-
-                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    
-                    // Add analyser for volume meter
-                    this.analyser = this.audioContext.createAnalyser();
-                    this.analyser.fftSize = 256;
-                    this.mediaStreamSource.connect(this.analyser);
-                    
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
-
-                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking && this.socket.connected) {
-                            const inputBuffer = audioProcessingEvent.inputBuffer;
-                            const inputData = inputBuffer.getChannelData(0);
-                            
-                            // Update volume meter
-                            const rms = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
-                            const volume = Math.min(100, Math.max(0, rms * 200));
-                            document.getElementById('volumeLevel').style.width = volume + '%';
-                            
-                            // Convert to Int16Array for efficient transmission
-                            const int16Data = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
-                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-                            }
-                            
-                            // Send audio data directly to admin
-                            this.socket.volatile.emit('audio-data', {
-                                roomCode: this.roomCode,
-                                audioBuffer: int16Data.buffer,
-                                sampleRate: this.audioContext.sampleRate,
-                                targetUserId: 'admin'
-                            });
-                        }
-                    };
-
-                    this.mediaStreamSource.connect(this.scriptProcessor);
-                    this.scriptProcessor.connect(this.audioContext.destination);
-                    
-                    console.log('High-quality audio streaming started');
-                } catch (error) {
-                    console.error('Error starting audio streaming:', error);
-                    this.showError('Could not access microphone. Please check permissions.');
+            closeAudioConnection() {
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                    this.peerConnection = null;
                 }
-            }
-
-            stopAudioStreaming() {
-                if (this.scriptProcessor) {
-                    this.scriptProcessor.disconnect();
-                    this.scriptProcessor = null;
+                if (this.audioElement) {
+                    this.audioElement.srcObject = null;
                 }
-                if (this.mediaStreamSource) {
-                    this.mediaStreamSource.disconnect();
-                    this.mediaStreamSource = null;
-                }
-                if (this.analyser) {
-                    this.analyser.disconnect();
-                    this.analyser = null;
-                }
-                console.log('Audio streaming stopped');
-            }
-
-            playAudio(audioBuffer) {
-                try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 48000,
-                            latencyHint: 'playback'
-                        });
-                    }
-
-                    const int16Data = new Int16Array(audioBuffer);
-                    const float32Data = new Float32Array(int16Data.length);
-                    
-                    // Convert back to Float32Array for playback
-                    for (let i = 0; i < int16Data.length; i++) {
-                        float32Data[i] = int16Data[i] / 32768;
-                    }
-
-                    const audioBufferSource = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
-                    audioBufferSource.getChannelData(0).set(float32Data);
-
-                    const source = this.audioContext.createBufferSource();
-                    source.buffer = audioBufferSource;
-                    source.connect(this.audioContext.destination);
-                    source.start();
-                    
-                } catch (error) {
-                    console.error('Error playing audio:', error);
-                }
+                document.getElementById('audioStats').textContent = 'Audio: Disconnected';
+                document.getElementById('audioStats').style.color = '#e74c3c';
             }
 
             updateTalkingIndicator(userId, isTalking) {
@@ -688,7 +751,7 @@ app.get('/', (req, res) => {
             }
 
             leaveRoom() {
-                this.stopAudioStreaming();
+                this.closeAudioConnection();
                 
                 if (this.localStream) {
                     this.localStream.getTracks().forEach(track => track.stop());
@@ -697,7 +760,7 @@ app.get('/', (req, res) => {
 
                 document.getElementById('joinSection').classList.remove('hidden');
                 document.getElementById('chatSection').classList.add('hidden');
-                document.getElementById('talkBtn').textContent = 'Click to Talk';
+                document.getElementById('talkBtn').textContent = 'Push to Talk';
                 document.getElementById('talkBtn').classList.remove('talking');
                 
                 this.roomCode = null;
@@ -834,7 +897,7 @@ app.get('/admin', (req, res) => {
         }
         .users-grid { 
             display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); 
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
             gap: 16px; 
             margin-top: 12px; 
         }
@@ -943,7 +1006,7 @@ app.get('/admin', (req, res) => {
         @media (max-width: 768px) { 
             .container { margin: 10px; border-radius: 8px; } 
             .room-info { flex-direction: column; gap: 12px; } 
-            .users-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); } 
+            .users-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); } 
         }
         h2 {
             font-size: 16px;
@@ -976,6 +1039,17 @@ app.get('/admin', (req, res) => {
             width: 0%;
             transition: width 0.1s ease;
         }
+        .audio-stats {
+            text-align: center;
+            font-size: 11px;
+            color: #666;
+            margin: 8px 0;
+        }
+        .user-audio-stats {
+            font-size: 9px;
+            color: #666;
+            margin-top: 4px;
+        }
     </style>
 </head>
 <body>
@@ -998,6 +1072,7 @@ app.get('/admin', (req, res) => {
         <div class="users-container">
             <h2>Connected Users - Click to Talk to Individual User</h2>
             <div class="connection-info">Green glow = User talking • Red glow = You talking to user • Broadcast = Talk to all users</div>
+            <div class="audio-stats" id="audioStats">Audio System: Ready</div>
             <div id="usersList" class="users-grid"></div>
         </div>
 
@@ -1020,9 +1095,8 @@ app.get('/admin', (req, res) => {
                 this.currentTalkingTo = null;
                 this.isBroadcasting = false;
                 this.localStream = null;
+                this.peerConnections = new Map();
                 this.audioContext = null;
-                this.mediaStreamSource = null;
-                this.scriptProcessor = null;
                 this.analyser = null;
                 this.reconnectAttempts = 0;
                 this.blockedUsers = new Set();
@@ -1063,6 +1137,7 @@ app.get('/admin', (req, res) => {
                     this.updateConnectionStatus('disconnected');
                     document.getElementById('createRoomBtn').disabled = true;
                     document.getElementById('broadcastBtn').disabled = true;
+                    this.closeAllAudioConnections();
                 });
 
                 this.socket.on('connect_error', (error) => {
@@ -1128,11 +1203,12 @@ app.get('/admin', (req, res) => {
                     e.preventDefault();
                     this.stopTalking();
                 });
-                this.testMicrophoneAccess();
+                this.initializeAudio();
             }
 
-            async testMicrophoneAccess() {
+            async initializeAudio() {
                 try {
+                    // Get microphone access
                     this.localStream = await navigator.mediaDevices.getUserMedia({ 
                         audio: {
                             echoCancellation: true,
@@ -1142,12 +1218,57 @@ app.get('/admin', (req, res) => {
                             sampleRate: 48000,
                             sampleSize: 16,
                             latency: 0
-                        } 
+                        },
+                        video: false
                     });
+                    
+                    // Initially disable audio tracks
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = false;
+                    });
+                    
+                    // Setup audio context for volume monitoring
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 48000,
+                        latencyHint: 'playback'
+                    });
+                    
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    const source = this.audioContext.createMediaStreamSource(this.localStream);
+                    source.connect(this.analyser);
+                    
                     console.log('Microphone access granted');
                 } catch (error) {
                     console.error('Microphone access denied:', error);
                     this.showError('Microphone access is required. Please allow microphone permissions.');
+                }
+            }
+
+            monitorVolume() {
+                if (!this.analyser) return;
+                
+                const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                
+                const checkVolume = () => {
+                    this.analyser.getByteFrequencyData(dataArray);
+                    
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        sum += dataArray[i];
+                    }
+                    const average = sum / dataArray.length;
+                    const volume = Math.min(100, (average / 255) * 200);
+                    
+                    document.getElementById('volumeLevel').style.width = volume + '%';
+                    
+                    if (this.isTalking) {
+                        requestAnimationFrame(checkVolume);
+                    }
+                };
+                
+                if (this.isTalking) {
+                    checkVolume();
                 }
             }
 
@@ -1159,11 +1280,14 @@ app.get('/admin', (req, res) => {
                     this.showSuccess('Room created with code: ' + data.roomCode);
                 });
 
-                this.socket.on('user-joined', (data) => {
+                this.socket.on('user-joined', async (data) => {
                     console.log('User joined:', data.userName);
                     this.userConnections.set(data.userId, true);
                     this.addUserToUI(data.userId, data.userName);
                     this.showSuccess('User ' + data.userName + ' joined the room');
+                    
+                    // Initialize WebRTC connection with new user
+                    await this.initializeUserWebRTC(data.userId, data.userName);
                 });
 
                 this.socket.on('users-update', (users) => {
@@ -1176,14 +1300,15 @@ app.get('/admin', (req, res) => {
                     this.updateTalkingIndicator(data.userId, data.isTalking);
                 });
 
-                this.socket.on('audio-data', (data) => {
-                    this.playAudio(data.audioBuffer);
+                this.socket.on('webrtc-signal', async (data) => {
+                    await this.handleWebRTCSignal(data);
                 });
 
                 this.socket.on('user-left', (data) => {
                     console.log('User left:', data.userName);
                     this.userConnections.set(data.userId, false);
                     this.updateUserConnection(data.userId, false);
+                    this.closeUserAudioConnection(data.userId);
                     this.showMessage('User ' + data.userName + ' left the room');
                 });
 
@@ -1212,6 +1337,112 @@ app.get('/admin', (req, res) => {
                 });
             }
 
+            async initializeUserWebRTC(userId, userName) {
+                try {
+                    if (!this.localStream) {
+                        await this.initializeAudio();
+                    }
+
+                    const configuration = {
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:stun1.l.google.com:19302' }
+                        ],
+                        sdpSemantics: 'unified-plan'
+                    };
+
+                    const peerConnection = new RTCPeerConnection(configuration);
+                    this.peerConnections.set(userId, peerConnection);
+
+                    // Add local stream
+                    this.localStream.getTracks().forEach(track => {
+                        peerConnection.addTrack(track, this.localStream);
+                    });
+
+                    // Handle incoming audio from user
+                    peerConnection.ontrack = (event) => {
+                        console.log('Received audio from user:', userName);
+                        const [remoteStream] = event.streams;
+                        
+                        // Create audio element for this user
+                        const audioElement = new Audio();
+                        audioElement.srcObject = remoteStream;
+                        audioElement.play().catch(e => console.log('Audio play error:', e));
+                        
+                        // Update UI to show audio is connected
+                        const userElement = document.getElementById('user-' + userId);
+                        if (userElement) {
+                            const statsElement = userElement.querySelector('.user-audio-stats') || 
+                                                document.createElement('div');
+                            statsElement.className = 'user-audio-stats';
+                            statsElement.textContent = 'Audio: Live';
+                            statsElement.style.color = '#27ae60';
+                            if (!userElement.querySelector('.user-audio-stats')) {
+                                userElement.appendChild(statsElement);
+                            }
+                        }
+                    };
+
+                    // Handle ICE candidates
+                    peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            this.socket.emit('webrtc-signal', {
+                                roomCode: this.roomCode,
+                                target: userId,
+                                candidate: event.candidate
+                            });
+                        }
+                    };
+
+                    // Handle incoming offers from users
+                    peerConnection.onnegotiationneeded = async () => {
+                        try {
+                            const offer = await peerConnection.createOffer({
+                                offerToReceiveAudio: true,
+                                offerToReceiveVideo: false
+                            });
+                            await peerConnection.setLocalDescription(offer);
+                            
+                            this.socket.emit('webrtc-signal', {
+                                roomCode: this.roomCode,
+                                target: userId,
+                                offer: offer
+                            });
+                        } catch (error) {
+                            console.error('Error creating offer:', error);
+                        }
+                    };
+
+                } catch (error) {
+                    console.error('WebRTC initialization error for user', userName, ':', error);
+                }
+            }
+
+            async handleWebRTCSignal(data) {
+                const peerConnection = this.peerConnections.get(data.from);
+                if (!peerConnection) return;
+
+                try {
+                    if (data.offer) {
+                        await peerConnection.setRemoteDescription(data.offer);
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+                        
+                        this.socket.emit('webrtc-signal', {
+                            roomCode: this.roomCode,
+                            target: data.from,
+                            answer: answer
+                        });
+                    } else if (data.answer) {
+                        await peerConnection.setRemoteDescription(data.answer);
+                    } else if (data.candidate) {
+                        await peerConnection.addIceCandidate(data.candidate);
+                    }
+                } catch (error) {
+                    console.error('WebRTC signal handling error:', error);
+                }
+            }
+
             createRoom() {
                 console.log('Creating room...');
                 this.socket.emit('create-room');
@@ -1231,7 +1462,14 @@ app.get('/admin', (req, res) => {
                 document.getElementById('broadcastBtn').classList.add('active');
                 document.getElementById('broadcastBtn').textContent = 'Broadcasting...';
 
-                this.startAudioStreaming('all');
+                // Enable audio tracks for all peer connections
+                if (this.localStream) {
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = true;
+                    });
+                }
+
+                this.monitorVolume();
 
                 this.socket.emit('start-talking', {
                     roomCode: this.roomCode,
@@ -1270,7 +1508,14 @@ app.get('/admin', (req, res) => {
                     userCircle.classList.add('receiving');
                 }
 
-                this.startAudioStreaming(targetUserId);
+                // Enable audio tracks for specific peer connection
+                if (this.localStream) {
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = true;
+                    });
+                }
+
+                this.monitorVolume();
 
                 this.socket.emit('start-talking', {
                     roomCode: this.roomCode,
@@ -1298,124 +1543,33 @@ app.get('/admin', (req, res) => {
                 this.currentTalkingTo = null;
                 document.getElementById('volumeLevel').style.width = '0%';
 
-                this.stopAudioStreaming();
+                // Disable audio tracks
+                if (this.localStream) {
+                    this.localStream.getAudioTracks().forEach(track => {
+                        track.enabled = false;
+                    });
+                }
 
                 this.socket.emit('stop-talking', {
                     roomCode: this.roomCode
                 });
             }
 
-            async startAudioStreaming(targetUserId) {
-                try {
-                    if (!this.localStream) {
-                        this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                channelCount: 1,
-                                sampleRate: 48000,
-                                sampleSize: 16,
-                                latency: 0
-                            } 
-                        });
-                    }
-
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 48000,
-                            latencyHint: 'playback'
-                        });
-                    }
-
-                    this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                    
-                    // Add analyser for volume meter
-                    this.analyser = this.audioContext.createAnalyser();
-                    this.analyser.fftSize = 256;
-                    this.mediaStreamSource.connect(this.analyser);
-                    
-                    this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
-
-                    this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.isTalking && this.socket.connected) {
-                            const inputBuffer = audioProcessingEvent.inputBuffer;
-                            const inputData = inputBuffer.getChannelData(0);
-                            
-                            // Update volume meter
-                            const rms = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
-                            const volume = Math.min(100, Math.max(0, rms * 200));
-                            document.getElementById('volumeLevel').style.width = volume + '%';
-                            
-                            // Convert to Int16Array for efficient transmission
-                            const int16Data = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
-                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-                            }
-                            
-                            // Send audio data to specific user or all users
-                            this.socket.volatile.emit('audio-data', {
-                                roomCode: this.roomCode,
-                                audioBuffer: int16Data.buffer,
-                                sampleRate: this.audioContext.sampleRate,
-                                targetUserId: targetUserId
-                            });
-                        }
-                    };
-
-                    this.mediaStreamSource.connect(this.scriptProcessor);
-                    this.scriptProcessor.connect(this.audioContext.destination);
-                    
-                    console.log('High-quality audio streaming started to:', targetUserId);
-                } catch (error) {
-                    console.error('Error starting audio streaming:', error);
-                    this.showError('Could not access microphone. Please check permissions.');
+            closeUserAudioConnection(userId) {
+                const peerConnection = this.peerConnections.get(userId);
+                if (peerConnection) {
+                    peerConnection.close();
+                    this.peerConnections.delete(userId);
                 }
             }
 
-            stopAudioStreaming() {
-                if (this.scriptProcessor) {
-                    this.scriptProcessor.disconnect();
-                    this.scriptProcessor = null;
-                }
-                if (this.mediaStreamSource) {
-                    this.mediaStreamSource.disconnect();
-                    this.mediaStreamSource = null;
-                }
-                if (this.analyser) {
-                    this.analyser.disconnect();
-                    this.analyser = null;
-                }
-                console.log('Audio streaming stopped');
-            }
-
-            playAudio(audioBuffer) {
-                try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 48000,
-                            latencyHint: 'playback'
-                        });
-                    }
-
-                    const int16Data = new Int16Array(audioBuffer);
-                    const float32Data = new Float32Array(int16Data.length);
-                    
-                    for (let i = 0; i < int16Data.length; i++) {
-                        float32Data[i] = int16Data[i] / 32768;
-                    }
-
-                    const audioBufferSource = this.audioContext.createBuffer(1, float32Data.length, this.audioContext.sampleRate);
-                    audioBufferSource.getChannelData(0).set(float32Data);
-
-                    const source = this.audioContext.createBufferSource();
-                    source.buffer = audioBufferSource;
-                    source.connect(this.audioContext.destination);
-                    source.start();
-                    
-                } catch (error) {
-                    console.error('Error playing audio:', error);
-                }
+            closeAllAudioConnections() {
+                this.peerConnections.forEach((connection, userId) => {
+                    connection.close();
+                });
+                this.peerConnections.clear();
+                document.getElementById('audioStats').textContent = 'Audio System: Disconnected';
+                document.getElementById('audioStats').style.color = '#e74c3c';
             }
 
             addUserToUI(userId, userName) {
@@ -1427,6 +1581,7 @@ app.get('/admin', (req, res) => {
                 userCircle.innerHTML = '<div class="user-avatar">' + userName.charAt(0).toUpperCase() + '</div>' +
                     '<div class="user-name">' + userName + '</div>' +
                     '<div class="user-status online"></div>' +
+                    '<div class="user-audio-stats">Audio: Connecting...</div>' +
                     '<button class="block-btn" id="block-btn-' + userName + '">Block</button>';
 
                 usersList.appendChild(userCircle);
@@ -1457,6 +1612,8 @@ app.get('/admin', (req, res) => {
                         userElement.classList.remove('connected');
                         userElement.querySelector('.user-status').classList.add('offline');
                         userElement.querySelector('.user-status').classList.remove('online');
+                        userElement.querySelector('.user-audio-stats').textContent = 'Audio: Offline';
+                        userElement.querySelector('.user-audio-stats').style.color = '#e74c3c';
                     }
                 }
             }
@@ -1474,8 +1631,12 @@ app.get('/admin', (req, res) => {
                 if (userCircle) {
                     if (isTalking) {
                         userCircle.classList.add('talking');
+                        userCircle.querySelector('.user-audio-stats').textContent = 'Audio: Talking';
+                        userCircle.querySelector('.user-audio-stats').style.color = '#27ae60';
                     } else {
                         userCircle.classList.remove('talking');
+                        userCircle.querySelector('.user-audio-stats').textContent = 'Audio: Live';
+                        userCircle.querySelector('.user-audio-stats').style.color = '#27ae60';
                     }
                 }
             }
@@ -1540,6 +1701,9 @@ app.get('/admin', (req, res) => {
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+
+  // Store peer connections
+  peerConnections.set(socket.id, new Map());
 
   // Rejoin room after reconnection
   socket.on('rejoin-room', (data) => {
@@ -1627,6 +1791,32 @@ io.on('connection', (socket) => {
     socket.to(room.admin).emit('users-update', users);
   });
 
+  // WebRTC signaling
+  socket.on('webrtc-signal', (data) => {
+    const { roomCode, target, offer, answer, candidate } = data;
+    
+    if (target === 'admin') {
+      // Send to room admin
+      const room = rooms.get(roomCode);
+      if (room && room.admin) {
+        socket.to(room.admin).emit('webrtc-signal', {
+          from: socket.id,
+          offer,
+          answer,
+          candidate
+        });
+      }
+    } else {
+      // Send to specific user
+      socket.to(target).emit('webrtc-signal', {
+        from: socket.id,
+        offer,
+        answer,
+        candidate
+      });
+    }
+  });
+
   // Start talking
   socket.on('start-talking', (data) => {
     const { targetUserId, roomCode } = data;
@@ -1653,6 +1843,19 @@ io.on('connection', (socket) => {
           userId: socket.id,
           isTalking: true
         });
+        
+        // Notify user that audio stream started
+        socket.emit('audio-stream-started', { userId: socket.id });
+      }
+      
+      // Notify target user when admin talks to them
+      if (socket.id === room.admin && targetUserId !== 'all') {
+        socket.to(targetUserId).emit('audio-stream-started', { userId: socket.id });
+      }
+      
+      // Notify all users when admin broadcasts
+      if (socket.id === room.admin && targetUserId === 'all') {
+        socket.to(roomCode).emit('audio-stream-started', { userId: socket.id });
       }
     }
   });
@@ -1677,38 +1880,14 @@ io.on('connection', (socket) => {
             userId: socket.id,
             isTalking: false
           });
+          
+          socket.emit('audio-stream-stopped', { userId: socket.id });
         }
-      }
-    }
-  });
-
-  // Real-time audio data streaming
-  socket.on('audio-data', (data) => {
-    const { roomCode, audioBuffer, sampleRate, targetUserId } = data;
-    
-    const room = rooms.get(roomCode);
-    if (room) {
-      if (targetUserId === 'admin') {
-        // User talking to admin - send only to admin
-        socket.to(room.admin).volatile.emit('audio-data', {
-          audioBuffer: audioBuffer,
-          sampleRate: sampleRate,
-          targetUserId: socket.id
-        });
-      } else if (targetUserId === 'all') {
-        // Admin broadcasting to all users
-        socket.to(roomCode).volatile.emit('audio-data', {
-          audioBuffer: audioBuffer,
-          sampleRate: sampleRate,
-          targetUserId: 'all'
-        });
-      } else {
-        // Admin talking to specific user
-        socket.to(targetUserId).volatile.emit('audio-data', {
-          audioBuffer: audioBuffer,
-          sampleRate: sampleRate,
-          targetUserId: socket.id
-        });
+        
+        // Notify target user when admin stops talking to them
+        if (socket.id === room.admin) {
+          socket.to(roomCode).emit('audio-stream-stopped', { userId: socket.id });
+        }
       }
     }
   });
@@ -1750,6 +1929,9 @@ io.on('connection', (socket) => {
   // Disconnection handling
   socket.on('disconnect', (reason) => {
     console.log('User disconnected:', socket.id, 'Reason:', reason);
+    
+    // Clean up peer connections
+    peerConnections.delete(socket.id);
     
     for (const [roomCode, room] of rooms.entries()) {
       if (room.admin === socket.id) {
