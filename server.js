@@ -348,12 +348,9 @@ app.get('/', (req, res) => {
                 this.scriptProcessor = null;
                 this.analyser = null;
                 this.reconnectAttempts = 0;
-                this.audioQueue = [];
-                this.isPlaying = false;
                 this.audioBuffer = [];
                 this.bufferSize = 0;
-                this.maxBufferSize = 48000; // 1 second buffer
-                this.lastAudioTime = 0;
+                this.maxBufferSize = 48000;
                 this.audioInterval = null;
                 this.init();
             }
@@ -540,7 +537,6 @@ app.get('/', (req, res) => {
                     document.getElementById('micIndicator').classList.add('active');
                     console.log('Microphone access granted');
                     
-                    // Start audio playback loop
                     this.startAudioPlayback();
                 } catch (error) {
                     console.error('Microphone access denied:', error);
@@ -594,7 +590,6 @@ app.get('/', (req, res) => {
                 });
 
                 this.socket.on('audio-data', (data) => {
-                    // Add audio to buffer with timestamp
                     this.addToAudioBuffer(data.audioBuffer, data.timestamp, data.senderId);
                 });
 
@@ -627,7 +622,6 @@ app.get('/', (req, res) => {
             }
 
             addToAudioBuffer(audioBuffer, timestamp, senderId) {
-                // Store audio in buffer with 1-second delay
                 const audioData = {
                     buffer: audioBuffer,
                     timestamp: timestamp,
@@ -638,12 +632,10 @@ app.get('/', (req, res) => {
                 this.audioBuffer.push(audioData);
                 this.bufferSize += audioBuffer.byteLength;
                 
-                // Update buffer indicator
                 const bufferPercent = Math.min(100, (this.bufferSize / this.maxBufferSize) * 100);
-                document.getElementById('bufferIndicator').textContent = `Buffer: ${Math.round(bufferPercent)}%`;
+                document.getElementById('bufferIndicator').textContent = 'Buffer: ' + Math.round(bufferPercent) + '%';
                 document.getElementById('bufferIndicator').style.color = bufferPercent > 80 ? '#e74c3c' : bufferPercent > 50 ? '#f39c12' : '#27ae60';
                 
-                // Remove old audio data if buffer gets too large
                 if (this.bufferSize > this.maxBufferSize * 2) {
                     const removed = this.audioBuffer.shift();
                     this.bufferSize -= removed.buffer.byteLength;
@@ -651,7 +643,6 @@ app.get('/', (req, res) => {
             }
 
             startAudioPlayback() {
-                // Play audio from buffer every 50ms
                 this.audioInterval = setInterval(() => {
                     this.playBufferedAudio();
                 }, 50);
@@ -668,8 +659,6 @@ app.get('/', (req, res) => {
 
             playBufferedAudio() {
                 const now = Date.now();
-                
-                // Find audio that's ready to play (1 second old)
                 const readyIndex = this.audioBuffer.findIndex(audio => 
                     now - audio.receivedAt >= 1000
                 );
@@ -681,9 +670,8 @@ app.get('/', (req, res) => {
                     
                     this.playAudio(audioData.buffer);
                     
-                    // Update buffer indicator
                     const bufferPercent = Math.min(100, (this.bufferSize / this.maxBufferSize) * 100);
-                    document.getElementById('bufferIndicator').textContent = `Buffer: ${Math.round(bufferPercent)}%`;
+                    document.getElementById('bufferIndicator').textContent = 'Buffer: ' + Math.round(bufferPercent) + '%';
                 }
             }
 
@@ -770,18 +758,15 @@ app.get('/', (req, res) => {
                             const inputBuffer = audioProcessingEvent.inputBuffer;
                             const inputData = inputBuffer.getChannelData(0);
                             
-                            // Update volume meter
                             const rms = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
                             const volume = Math.min(100, Math.max(0, rms * 200));
                             document.getElementById('volumeLevel').style.width = volume + '%';
                             
-                            // Convert to Int16Array for efficient transmission
                             const int16Data = new Int16Array(inputData.length);
                             for (let i = 0; i < inputData.length; i++) {
                                 int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
                             }
                             
-                            // Send audio with timestamp for buffering
                             this.socket.volatile.emit('audio-data', {
                                 roomCode: this.roomCode,
                                 audioBuffer: int16Data.buffer,
@@ -826,7 +811,6 @@ app.get('/', (req, res) => {
                     const int16Data = new Int16Array(audioBuffer);
                     const float32Data = new Float32Array(int16Data.length);
                     
-                    // Convert back to Float32Array for playback
                     for (let i = 0; i < int16Data.length; i++) {
                         float32Data[i] = int16Data[i] / 32768;
                     }
@@ -904,7 +888,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Admin page route - Fixed version with proper user communication
+// Admin page route
 app.get('/admin', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -1350,7 +1334,6 @@ app.get('/admin', (req, res) => {
                     const source = this.audioContext.createMediaStreamSource(this.localStream);
                     source.connect(this.analyser);
                     
-                    // Start audio playback loop
                     this.startAudioPlayback();
                     
                     console.log('Microphone access granted');
@@ -1413,7 +1396,6 @@ app.get('/admin', (req, res) => {
                 });
 
                 this.socket.on('audio-data', (data) => {
-                    // Add audio to buffer with timestamp
                     this.addToAudioBuffer(data.audioBuffer, data.timestamp, data.senderId);
                 });
 
@@ -1460,9 +1442,8 @@ app.get('/admin', (req, res) => {
                 this.audioBuffer.push(audioData);
                 this.bufferSize += audioBuffer.byteLength;
                 
-                // Update buffer indicator
                 const bufferPercent = Math.min(100, (this.bufferSize / this.maxBufferSize) * 100);
-                document.getElementById('bufferIndicator').textContent = `Buffer: ${Math.round(bufferPercent)}%`;
+                document.getElementById('bufferIndicator').textContent = 'Buffer: ' + Math.round(bufferPercent) + '%';
                 document.getElementById('bufferIndicator').style.color = bufferPercent > 80 ? '#e74c3c' : bufferPercent > 50 ? '#f39c12' : '#27ae60';
                 
                 if (this.bufferSize > this.maxBufferSize * 2) {
@@ -1500,7 +1481,7 @@ app.get('/admin', (req, res) => {
                     this.playAudio(audioData.buffer);
                     
                     const bufferPercent = Math.min(100, (this.bufferSize / this.maxBufferSize) * 100);
-                    document.getElementById('bufferIndicator').textContent = `Buffer: ${Math.round(bufferPercent)}%`;
+                    document.getElementById('bufferIndicator').textContent = 'Buffer: ' + Math.round(bufferPercent) + '%';
                 }
             }
 
