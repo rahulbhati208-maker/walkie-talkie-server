@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-// Removed: const Buffer = require('buffer').Buffer;
 
 const app = express();
 const server = http.createServer(app);
@@ -11,16 +10,11 @@ const io = socketIo(server, {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  // Reduced maxHttpBufferSize since we are no longer uploading large recorded files
-  maxHttpBufferSize: 1e6 // 1MB limit for safety
+  maxHttpBufferSize: 1e6 // 1MB limit
 });
 
 // Store rooms and users globally
 const rooms = new Map();
-
-// Removed: currentRecordings map
-// Removed: recordings map
-
 
 /**
  * Generates a unique 4-digit room code.
@@ -34,12 +28,740 @@ function generateRoomCode() {
   return code;
 }
 
-// Removed: encodeWAV function
+// --- CLIENT-SIDE JAVASCRIPT LOGIC (Served separately at /client.js) ---
+
+function getClientScriptContent() {
+    // This function returns the large client-side logic as a clean string.
+    // It is served via a separate Express route to prevent the 'SyntaxError: Unexpected token class'.
+    return `
+            class WalkieTalkieApp {
+                constructor(isAdmin) {
+                    this.socket = null;
+                    this.roomCode = null;
+                    this.userName = isAdmin ? 'Admin' : null;
+                    this.isAdmin = isAdmin;
+                    this.isTalking = false;
+                    this.currentTalkingTo = null; 
+                    this.localStream = null;
+                    this.audioContext = null;
+                    this.mediaStreamSource = null;
+                    this.scriptProcessor = null;
+                    this.reconnectAttempts = 0;
+                    this.maxReconnectAttempts = 5;
+                    this.reconnectTimeout = null;
+                    this.blockedUsers = new Set();
+                    
+                    this.init();
+                }
+
+                init() {
+                    if (!this.isAdmin) {
+                        this.loadFromLocalStorage();
+                    }
+                    this.connectToServer();
+                    this.setupAutoReconnect();
+                    this.setupUIBindings();
+                    this.testMicrophoneAccess();
+                }
+
+                loadFromLocalStorage() {
+                    const savedUserName = localStorage.getItem('walkieUserName');
+                    const savedRoomCode = localStorage.getItem('walkieRoomCode');
+                    
+                    if (savedUserName) {
+                        document.getElementById('userName').value = savedUserName;
+                    }
+                    if (savedRoomCode) {
+                        document.getElementById('roomCode').value = savedRoomCode;
+                    }
+                }
+
+                saveToLocalStorage() {
+                    if (this.userName) {
+                        localStorage.setItem('walkieUserName', this.userName);
+                    }
+                    if (this.roomCode) {
+                        localStorage.setItem('walkieRoomCode', this.roomCode);
+                    }
+                }
+
+                connectToServer() {
+                    console.log('Connecting to server...');
+                    this.updateConnectionStatus('connecting');
+                    
+                    if (this.socket) {
+                        this.socket.disconnect();
+                    }
+
+                    this.socket = io({ reconnection: false });
+                    
+                    this.socket.on('connect', () => {
+                        console.log('Connected to server, Socket ID:', this.socket.id);
+                        this.reconnectAttempts = 0;
+                        this.updateConnectionStatus('connected');
+                        this.enableButtons();
+                        
+                        if (this.roomCode && this.userName) {
+                            console.log('Rejoining room...');
+                            this.socket.emit('join-room', { 
+                                roomCode: this.roomCode, 
+                                userName: this.userName 
+                            });
+                        }
+                    });
+
+                    this.socket.on('disconnect', (reason) => {
+                        console.log('Disconnected from server:', reason);
+                        this.updateConnectionStatus('disconnected');
+                        this.disableButtons();
+                        this.stopAudioStreaming();
+                        
+                        if (reason === 'io server disconnect') {
+                            this.socket.connect();
+                        } else {
+                            this.scheduleReconnect();
+                        }
+                    });
+
+                    this.socket.on('connect_error', (error) => {
+                        console.log('Connection error:', error);
+                        this.updateConnectionStatus('error');
+                        this.scheduleReconnect();
+                    });
+
+                    this.setupSocketListeners();
+                }
+
+                scheduleReconnect() {
+                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                        this.reconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                        console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
+                        
+                        this.reconnectTimeout = setTimeout(() => {
+                            this.connectToServer();
+                        }, delay);
+                    } else {
+                        console.log('Max reconnection attempts reached');
+                        this.showError('Unable to connect to server. Please refresh the page.');
+                    }
+                }
+
+                setupAutoReconnect() {
+                    window.addEventListener('online', () => {
+                        console.log('Browser is online, reconnecting...');
+                        if (this.socket && !this.socket.connected) {
+                            this.connectToServer();
+                        }
+                    });
+
+                    window.addEventListener('beforeunload', () => {
+                        if (this.reconnectTimeout) {
+                            clearTimeout(this.reconnectTimeout);
+                        }
+                        if (this.socket) {
+                            this.socket.disconnect();
+                        }
+                    });
+                }
+
+                updateConnectionStatus(status) {
+                    const statusDot = document.getElementById('connectionStatus');
+                    const statusText = document.getElementById('connectionText');
+                    
+                    if (!statusDot || !statusText) return;
+                    
+                    statusDot.className = 'status-dot';
+                    statusText.style.color = '';
+                    
+                    switch(status) {
+                        case 'connected':
+                            statusDot.classList.add('connected');
+                            statusText.textContent = 'Connected';
+                            statusText.style.color = '#27ae60';
+                            break;
+                        case 'connecting':
+                            statusDot.textContent = 'Connecting...';
+                            statusDot.style.color = '#3498db';
+                            break;
+                        case 'reconnecting':
+                            statusDot.classList.add('reconnecting');
+                            statusText.textContent = 'Reconnecting...';
+                            statusText.style.color = '#f39c12';
+                            break;
+                        case 'disconnected':
+                            statusDot.textContent = 'Disconnected';
+                            statusDot.style.color = '#e74c3c';
+                            break;
+                        case 'error':
+                            statusDot.textContent = 'Connection Error';
+                            statusDot.style.color = '#e74c3c';
+                            break;
+                    }
+                }
+
+                enableButtons() {
+                    if (!this.isAdmin) {
+                        const joinBtn = document.getElementById('joinRoomBtn');
+                        if(joinBtn) joinBtn.disabled = false;
+                    } else {
+                         const createBtn = document.getElementById('createRoomBtn');
+                         if(createBtn) createBtn.disabled = false;
+                    }
+                }
+
+                disableButtons() {
+                    if (!this.isAdmin) {
+                        const joinBtn = document.getElementById('joinRoomBtn');
+                        if(joinBtn) joinBtn.disabled = true;
+                    } else {
+                        const createBtn = document.getElementById('createRoomBtn');
+                        if(createBtn) createBtn.disabled = true;
+                    }
+                }
+
+                setupUIBindings() {
+                    if (this.isAdmin) {
+                        document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
+                    } else {
+                        document.getElementById('joinRoomBtn').addEventListener('click', () => this.joinRoom());
+                        // PTT events: touchstart/touchend for mobile, mousedown/mouseup for desktop
+                        document.getElementById('talkBtn').addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
+                        document.getElementById('talkBtn').addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
+                        document.getElementById('talkBtn').addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
+                        document.getElementById('talkBtn').addEventListener('mouseup', () => this.stopTalking());
+                    }
+                }
+
+                async testMicrophoneAccess() {
+                    try {
+                        this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                            audio: {
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true,
+                                channelCount: 1,
+                                sampleRate: 16000
+                            } 
+                        });
+                        
+                        const micIndicator = document.getElementById('micIndicator');
+                        if(micIndicator) micIndicator.classList.add('active');
+                        console.log('Microphone access granted');
+                        
+                        this.localStream.getTracks().forEach(track => track.stop());
+                        this.localStream = null;
+                        
+                    } catch (error) {
+                        console.error('Microphone access denied:', error);
+                        this.showError('Microphone access is required. Please allow microphone permissions.');
+                        const micIndicator = document.getElementById('micIndicator');
+                        if(micIndicator) micIndicator.classList.remove('active');
+                    }
+                }
+
+                setupSocketListeners() {
+                    this.socket.on('room-created', (data) => {
+                        this.roomCode = data.roomCode;
+                        document.getElementById('roomCode').textContent = data.roomCode;
+                        this.showSuccess('Room created with code: ' + data.roomCode);
+                    });
+
+                    this.socket.on('room-joined', (data) => {
+                        this.roomCode = data.roomCode;
+                        this.userName = data.userName;
+                        document.getElementById('currentUserName').textContent = data.userName;
+                        document.getElementById('currentRoomCode').textContent = data.roomCode;
+                        document.getElementById('joinSection').classList.add('hidden');
+                        document.getElementById('chatSection').classList.remove('hidden');
+                        this.saveToLocalStorage();
+                        this.showSuccess('Successfully joined room: ' + data.roomCode);
+                        this.currentTalkingTo = data.adminId; 
+                    });
+
+                    this.socket.on('users-update', (users) => {
+                        if (this.isAdmin) {
+                            this.updateUsersList(users);
+                        }
+                    });
+
+                    this.socket.on('user-talking', (data) => {
+                        this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
+                    });
+
+                    this.socket.on('audio-data', (data) => {
+                        if (this.isAdmin || data.targetUserId === this.socket.id) {
+                            if (!this.isTalking) {
+                                this.playAudio(data.audioBuffer, data.sampleRate);
+                            } else {
+                                console.log('Suppressing incoming audio while talking.');
+                            }
+                        }
+                    });
+                    
+                    this.socket.on('user-left', (data) => {
+                        this.removeUserFromUI(data.userId);
+                        this.showMessage('User ' + data.userName + ' left the room');
+                    });
+
+                    this.socket.on('blocked', (data) => {
+                        this.showError(data.message);
+                        this.leaveRoom();
+                    });
+
+                    this.socket.on('room-closed', () => {
+                        this.showError('Room has been closed by admin');
+                        this.leaveRoom();
+                    });
+
+                    this.socket.on('error', (data) => {
+                        this.showError(data.message);
+                    });
+                    
+                    this.socket.on('user-blocked', (data) => {
+                        if (this.isAdmin) {
+                            this.blockedUsers.add(data.userName);
+                            this.updateBlockButton(data.userName, true);
+                            this.showSuccess('User ' + data.userName + ' has been blocked');
+                        }
+                    });
+
+                    this.socket.on('user-unblocked', (data) => {
+                        if (this.isAdmin) {
+                            this.blockedUsers.delete(data.userName);
+                            this.updateBlockButton(data.userName, false);
+                            this.showSuccess('User ' + data.userName + ' has been unblocked');
+                        }
+                    });
+                }
+
+                createRoom() {
+                    if (!this.socket.connected) {
+                        this.showError('Not connected to server');
+                        return;
+                    }
+                    this.socket.emit('create-room');
+                }
+
+                joinRoom() {
+                    const userNameInput = document.getElementById('userName');
+                    const roomCodeInput = document.getElementById('roomCode');
+                    const userName = userNameInput.value.trim();
+                    const roomCode = roomCodeInput.value.trim();
+
+                    if (!userName) {
+                        this.showError('Please enter your name');
+                        userNameInput.focus();
+                        return;
+                    }
+
+                    if (!roomCode || roomCode.length !== 4 || !/^\\d{4}$/.test(roomCode)) {
+                        this.showError('Please enter a valid 4-digit room code');
+                        roomCodeInput.focus();
+                        return;
+                    }
+
+                    this.userName = userName;
+                    this.socket.emit('join-room', { roomCode, userName });
+                }
+
+                // PTT Logic
+                async startTalking(targetUserId) {
+                    if (!this.roomCode || !this.socket.connected) {
+                        this.showError('Not connected to room');
+                        return;
+                    }
+                    
+                    if (!this.localStream) {
+                        // Re-request access if stream was closed previously
+                        try {
+                           this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                                audio: {
+                                    echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000
+                                } 
+                            });
+                        } catch (e) {
+                            this.showError('Microphone access denied. Cannot start talk session.');
+                            return;
+                        }
+                    }
+
+                    const finalTargetId = this.isAdmin ? targetUserId : this.currentTalkingTo;
+                    if (!finalTargetId) {
+                         this.showError('No target selected or no admin in room.');
+                         return;
+                    }
+
+                    this.isTalking = true;
+                    this.currentTalkingTo = finalTargetId;
+                    
+                    if (!this.isAdmin) {
+                        const talkBtn = document.getElementById('talkBtn');
+                        if (talkBtn) {
+                           talkBtn.classList.add('talking');
+                           talkBtn.textContent = 'RELEASE TO SEND';
+                        }
+                        const userStatus = document.getElementById('userStatus');
+                        if (userStatus) userStatus.classList.add('active');
+                    } else {
+                        this.updateAdminTalkButtons(finalTargetId);
+                    }
+                    
+                    await this.startAudioStreaming();
+
+                    this.socket.emit('start-talking', {
+                        targetUserId: finalTargetId,
+                        roomCode: this.roomCode,
+                    });
+                }
+
+                stopTalking() {
+                    if (!this.isTalking) return;
+                    
+                    this.isTalking = false;
+                    
+                    if (!this.isAdmin) {
+                        const talkBtn = document.getElementById('talkBtn');
+                        if (talkBtn) {
+                            talkBtn.classList.remove('talking');
+                            talkBtn.textContent = 'HOLD TO TALK';
+                        }
+                        const userStatus = document.getElementById('userStatus');
+                        if (userStatus) userStatus.classList.remove('active');
+                    } else {
+                        this.updateAdminTalkButtons(null);
+                    }
+
+                    this.stopAudioStreaming();
+
+                    this.socket.emit('stop-talking', {
+                        roomCode: this.roomCode,
+                    });
+                }
+
+                // --- AUDIO STREAMING (Sender) ---
+                async startAudioStreaming() {
+                    try {
+                        if (!this.localStream) {
+                            // This should have been handled in startTalking, but re-init for safety
+                            this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                                audio: {
+                                    echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000
+                                } 
+                            });
+                        }
+
+                        if (!this.audioContext) {
+                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                            if (this.audioContext.state === 'suspended') {
+                                this.audioContext.resume();
+                            }
+                        }
+
+                        this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
+                        this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
+
+                        this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                            if (this.isTalking && this.socket.connected) {
+                                const inputBuffer = audioProcessingEvent.inputBuffer;
+                                const inputData = inputBuffer.getChannelData(0);
+                                
+                                const int16Data = new Int16Array(inputData.length);
+                                for (let i = 0; i < inputData.length; i++) {
+                                    int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                                }
+                                
+                                this.socket.emit('audio-data', {
+                                    roomCode: this.roomCode,
+                                    audioBuffer: int16Data.buffer,
+                                    sampleRate: this.audioContext.sampleRate,
+                                    targetUserId: this.currentTalkingTo
+                                });
+                            }
+                        };
+
+                        this.mediaStreamSource.connect(this.scriptProcessor);
+                        this.scriptProcessor.connect(this.audioContext.destination);
+                        
+                    } catch (error) {
+                        console.error('Error starting audio streaming:', error);
+                        this.showError('Could not start microphone stream. Check permissions and try again.');
+                        this.stopTalking();
+                    }
+                }
+
+                stopAudioStreaming() {
+                    if (this.scriptProcessor) {
+                        this.scriptProcessor.disconnect();
+                        this.scriptProcessor = null;
+                    }
+                    if (this.mediaStreamSource) {
+                        this.mediaStreamSource.disconnect();
+                        this.mediaStreamSource = null;
+                    }
+                    // Crucially, we do NOT stop the tracks on the localStream here, allowing quick re-use.
+                }
+                
+                // --- AUDIO PLAYBACK (Receiver) ---
+                playAudio(audioBuffer, sampleRate) {
+                    try {
+                        if (!this.audioContext) {
+                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                            if (this.audioContext.state === 'suspended') {
+                                this.audioContext.resume();
+                            }
+                        }
+
+                        const int16Data = new Int16Array(audioBuffer);
+                        const float32Data = new Float32Array(int16Data.length);
+                        
+                        for (let i = 0; i < int16Data.length; i++) {
+                            float32Data[i] = int16Data[i] / 32768;
+                        }
+
+                        const incomingAudioBuffer = this.audioContext.createBuffer(1, float32Data.length, sampleRate);
+                        incomingAudioBuffer.getChannelData(0).set(float32Data);
+
+                        const source = this.audioContext.createBufferSource();
+                        source.buffer = incomingAudioBuffer;
+                        source.connect(this.audioContext.destination);
+                        source.start(0); 
+                        
+                    } catch (error) {
+                        console.error('Error playing audio:', error);
+                    }
+                }
+
+                addUserToUI(userId, userName) {
+                    if (!this.isAdmin) return;
+
+                    const usersList = document.getElementById('usersList');
+                    if (document.getElementById('user-' + userId)) return; 
+
+                    const userCircle = document.createElement('div');
+                    userCircle.className = 'user-circle';
+                    userCircle.id = 'user-' + userId;
+                    
+                    const isBlocked = this.blockedUsers.has(userName);
+
+                    userCircle.innerHTML = \`
+                        <div class="user-avatar">\${userName.charAt(0).toUpperCase()}</div>
+                        <div class="user-name">\${userName}</div>
+                        <div class="user-status online"></div>
+                        <div class="user-controls">
+                            <button class="talk-btn-mini \${isBlocked ? 'blocked' : ''}" data-user-id="\${userId}" data-user-name="\${userName}">
+                                \${isBlocked ? 'Blocked' : 'Talk'}
+                            </button>
+                            <button class="block-btn" id="block-btn-\${userName}" data-user-name="\${userName}">
+                                \${isBlocked ? 'Unblock' : 'Block'}
+                            </button>
+                        </div>
+                    \`;
+
+                    usersList.appendChild(userCircle);
+                    
+                    const talkBtnMini = userCircle.querySelector('.talk-btn-mini');
+                    talkBtnMini.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.toggleAdminTalking(userId);
+                    });
+                    
+                    const blockBtn = document.getElementById('block-btn-' + userName);
+                    blockBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.toggleBlockUser(userName);
+                    });
+                }
+                
+                toggleAdminTalking(targetUserId) {
+                     if (this.isTalking && this.currentTalkingTo === targetUserId) {
+                        this.stopTalking();
+                    } else {
+                        if (this.isTalking) {
+                            this.stopTalking();
+                        }
+                        this.startTalking(targetUserId);
+                    }
+                    this.updateAdminTalkButtons(targetUserId);
+                }
+                
+                updateAdminTalkButtons(activeUserId) {
+                    document.querySelectorAll('.user-circle').forEach(circle => {
+                        circle.classList.remove('admin-target'); 
+                    });
+                    
+                    document.querySelectorAll('.talk-btn-mini').forEach(btn => {
+                        btn.classList.remove('talking');
+                        const userName = btn.getAttribute('data-user-name');
+                        if (!this.blockedUsers.has(userName)) {
+                            btn.textContent = 'Talk';
+                        }
+                    });
+                    
+                    if (this.isTalking && activeUserId) {
+                        const activeBtn = document.querySelector(\`.talk-btn-mini[data-user-id="\${activeUserId}"]\`);
+                        const activeCircle = document.getElementById('user-' + activeUserId);
+
+                        if (activeBtn) {
+                            activeBtn.classList.add('talking');
+                            activeBtn.textContent = 'STOP';
+                        }
+                        if (activeCircle) {
+                             activeCircle.classList.add('admin-target'); 
+                        }
+                    }
+                }
+
+                removeUserFromUI(userId) {
+                    const userElement = document.getElementById('user-' + userId);
+                    if (userElement) {
+                        userElement.remove();
+                    }
+                    if (this.isAdmin && this.currentTalkingTo === userId) {
+                        this.stopTalking();
+                    }
+                }
+
+                updateUsersList(users) {
+                    if (!this.isAdmin) return;
+                    
+                    const usersList = document.getElementById('usersList');
+                    // Simple removal and re-render for clean list state
+                    usersList.innerHTML = '';
+                    
+                    users.forEach(user => {
+                        this.addUserToUI(user.id, user.name);
+                    });
+                    
+                    this.updateAdminTalkButtons(this.currentTalkingTo);
+                }
+
+                updateTalkingIndicator(userId, targetUserId, isTalking) {
+                    if (this.isAdmin) {
+                        const userCircle = document.getElementById('user-' + userId);
+                        if (userCircle) {
+                            userCircle.classList.toggle('talking', isTalking && userId !== this.socket.id);
+                            userCircle.classList.toggle('receiving', isTalking && targetUserId === userId && userId !== this.socket.id);
+                        }
+                    } else {
+                        const adminStatus = document.getElementById('adminStatus');
+                        const talkBtn = document.getElementById('talkBtn');
+                        
+                        if (adminStatus && talkBtn) {
+                            const isIncomingAdminSpeech = isTalking && userId === this.currentTalkingTo && targetUserId === this.socket.id;
+                            
+                            adminStatus.classList.toggle('active', isIncomingAdminSpeech);
+                            talkBtn.disabled = isIncomingAdminSpeech; 
+                            
+                            if (isIncomingAdminSpeech) {
+                                talkBtn.textContent = 'RECEIVING...';
+                            } else if (!this.isTalking) {
+                                talkBtn.textContent = 'HOLD TO TALK';
+                            }
+                        }
+                    }
+                }
+
+                toggleBlockUser(userName) {
+                    if (this.isAdmin && this.roomCode) {
+                        this.socket.emit('toggle-block-user', {
+                            roomCode: this.roomCode,
+                            userName: userName
+                        });
+                    }
+                }
+
+                updateBlockButton(userName, isBlocked) {
+                    const blockBtn = document.getElementById('block-btn-' + userName);
+                    const talkBtnMini = document.querySelector(\`.talk-btn-mini[data-user-name="\${userName}"]\`);
+
+                    if (blockBtn) {
+                        blockBtn.textContent = isBlocked ? 'Unblock' : 'Block';
+                        blockBtn.classList.toggle('blocked', !isBlocked); 
+                    }
+                    if (talkBtnMini) {
+                        talkBtnMini.textContent = isBlocked ? 'Blocked' : 'Talk';
+                        talkBtnMini.classList.toggle('blocked', isBlocked);
+                        talkBtnMini.disabled = isBlocked;
+                        
+                        if (isBlocked && this.currentTalkingTo === talkBtnMini.getAttribute('data-user-id')) {
+                            this.stopTalking();
+                        }
+                        this.updateAdminTalkButtons(this.currentTalkingTo); 
+                    }
+                }
+                
+                leaveRoom() {
+                    this.stopAudioStreaming();
+                    
+                    if (this.localStream) {
+                        this.localStream.getTracks().forEach(track => track.stop());
+                        this.localStream = null;
+                    }
+
+                    if (this.isAdmin) {
+                        document.getElementById('roomCode').textContent = '----';
+                        const usersList = document.getElementById('usersList');
+                        if (usersList) usersList.innerHTML = '';
+                    } else {
+                        const joinSection = document.getElementById('joinSection');
+                        if (joinSection) joinSection.classList.remove('hidden');
+                        const chatSection = document.getElementById('chatSection');
+                        if (chatSection) chatSection.classList.add('hidden');
+                        
+                        const talkBtn = document.getElementById('talkBtn');
+                        if (talkBtn) talkBtn.textContent = 'HOLD TO TALK';
+                        
+                        const userStatus = document.getElementById('userStatus');
+                        if (userStatus) userStatus.classList.remove('active');
+                        const adminStatus = document.getElementById('adminStatus');
+                        if (adminStatus) adminStatus.classList.remove('active');
+                    }
+                    this.roomCode = null;
+                    this.userName = null;
+                    localStorage.removeItem('walkieRoomCode');
+                    localStorage.removeItem('walkieUserName');
+                }
+
+                showMessage(message) {
+                    console.log(message);
+                }
+
+                showSuccess(message) {
+                    const successElement = document.getElementById('successMessage');
+                    if (successElement) {
+                        successElement.textContent = message;
+                        successElement.classList.remove('hidden');
+                        setTimeout(() => {
+                            successElement.classList.add('hidden');
+                        }, 3000);
+                    }
+                }
+
+                showError(message) {
+                    const errorElement = document.getElementById('errorMessage');
+                    if (errorElement) {
+                        errorElement.textContent = message;
+                        errorElement.classList.remove('hidden');
+                        setTimeout(() => {
+                            errorElement.classList.add('hidden');
+                        }, 5000);
+                    }
+                }
+            }
+    `;
+}
 
 
-// --- Serve HTML Pages ---
+// --- Express Routes ---
 
-// Middleware to inject the common CSS/JS logic into the HTML templates
+// Route 1: Serve the main client script file separately
+app.get('/client.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.send(getClientScriptContent());
+});
+
+// Route 2: Serve the CSS styles
 function getCommonStyles() {
     return `
         <style>
@@ -199,760 +921,8 @@ function getCommonStyles() {
     `;
 }
 
-function getCommonScript() {
-    return `
-        <script src="/socket.io/socket.io.js"></script>
-        <script>
-            class WalkieTalkieApp {
-                constructor(isAdmin) {
-                    this.socket = null;
-                    this.roomCode = null;
-                    this.userName = isAdmin ? 'Admin' : null;
-                    this.isAdmin = isAdmin;
-                    this.isTalking = false;
-                    this.currentTalkingTo = null; // Admin only
-                    this.localStream = null;
-                    this.audioContext = null;
-                    this.mediaStreamSource = null;
-                    this.scriptProcessor = null;
-                    this.reconnectAttempts = 0;
-                    this.maxReconnectAttempts = 5;
-                    this.reconnectTimeout = null;
-                    this.blockedUsers = new Set();
-                    this.audioQueue = [];
-                    this.isPlaying = false;
-                    this.playbackSource = null;
 
-                    this.init();
-                }
-
-                init() {
-                    if (!this.isAdmin) {
-                        this.loadFromLocalStorage();
-                    }
-                    this.connectToServer();
-                    this.setupAutoReconnect();
-                    this.setupUIBindings();
-                    this.testMicrophoneAccess();
-                }
-
-                loadFromLocalStorage() {
-                    const savedUserName = localStorage.getItem('walkieUserName');
-                    const savedRoomCode = localStorage.getItem('walkieRoomCode');
-                    
-                    if (savedUserName) {
-                        document.getElementById('userName').value = savedUserName;
-                    }
-                    if (savedRoomCode) {
-                        document.getElementById('roomCode').value = savedRoomCode;
-                    }
-                }
-
-                saveToLocalStorage() {
-                    if (this.userName) {
-                        localStorage.setItem('walkieUserName', this.userName);
-                    }
-                    if (this.roomCode) {
-                        localStorage.setItem('walkieRoomCode', this.roomCode);
-                    }
-                }
-
-                connectToServer() {
-                    console.log('Connecting to server...');
-                    this.updateConnectionStatus('connecting');
-                    
-                    if (this.socket) {
-                        this.socket.disconnect();
-                    }
-
-                    // Use relative path for Socket.io to connect to the same host
-                    this.socket = io({ reconnection: false });
-                    
-                    this.socket.on('connect', () => {
-                        console.log('Connected to server, Socket ID:', this.socket.id);
-                        this.reconnectAttempts = 0;
-                        this.updateConnectionStatus('connected');
-                        this.enableButtons();
-                        
-                        // Attempt to rejoin room if credentials are saved
-                        if (this.roomCode && this.userName) {
-                            console.log('Rejoining room...');
-                            this.socket.emit('join-room', { 
-                                roomCode: this.roomCode, 
-                                userName: this.userName 
-                            });
-                        }
-                    });
-
-                    this.socket.on('disconnect', (reason) => {
-                        console.log('Disconnected from server:', reason);
-                        this.updateConnectionStatus('disconnected');
-                        this.disableButtons();
-                        this.stopAudioStreaming();
-                        
-                        if (reason === 'io server disconnect') {
-                            this.socket.connect();
-                        } else {
-                            this.scheduleReconnect();
-                        }
-                    });
-
-                    this.socket.on('connect_error', (error) => {
-                        console.log('Connection error:', error);
-                        this.updateConnectionStatus('error');
-                        this.scheduleReconnect();
-                    });
-
-                    this.setupSocketListeners();
-                }
-
-                scheduleReconnect() {
-                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                        this.reconnectAttempts++;
-                        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-                        console.log('Reconnecting in ' + delay + 'ms (attempt ' + this.reconnectAttempts + ')');
-                        
-                        this.reconnectTimeout = setTimeout(() => {
-                            this.connectToServer();
-                        }, delay);
-                    } else {
-                        console.log('Max reconnection attempts reached');
-                        this.showError('Unable to connect to server. Please refresh the page.');
-                    }
-                }
-
-                setupAutoReconnect() {
-                    window.addEventListener('online', () => {
-                        console.log('Browser is online, reconnecting...');
-                        if (this.socket && !this.socket.connected) {
-                            this.connectToServer();
-                        }
-                    });
-
-                    window.addEventListener('beforeunload', () => {
-                        if (this.reconnectTimeout) {
-                            clearTimeout(this.reconnectTimeout);
-                        }
-                        if (this.socket) {
-                            this.socket.disconnect();
-                        }
-                    });
-                }
-
-                updateConnectionStatus(status) {
-                    const statusDot = document.getElementById('connectionStatus');
-                    const statusText = document.getElementById('connectionText');
-                    
-                    if (!statusDot || !statusText) return;
-                    
-                    statusDot.className = 'status-dot';
-                    statusText.style.color = '';
-                    
-                    switch(status) {
-                        case 'connected':
-                            statusDot.classList.add('connected');
-                            statusText.textContent = 'Connected';
-                            statusText.style.color = '#27ae60';
-                            break;
-                        case 'connecting':
-                            statusDot.textContent = 'Connecting...';
-                            statusDot.style.color = '#3498db';
-                            break;
-                        case 'reconnecting':
-                            statusDot.classList.add('reconnecting');
-                            statusText.textContent = 'Reconnecting...';
-                            statusText.style.color = '#f39c12';
-                            break;
-                        case 'disconnected':
-                            statusDot.textContent = 'Disconnected';
-                            statusDot.style.color = '#e74c3c';
-                            break;
-                        case 'error':
-                            statusDot.textContent = 'Connection Error';
-                            statusDot.style.color = '#e74c3c';
-                            break;
-                    }
-                }
-
-                enableButtons() {
-                    if (!this.isAdmin) {
-                        document.getElementById('joinRoomBtn').disabled = false;
-                    } else {
-                         document.getElementById('createRoomBtn').disabled = false;
-                    }
-                }
-
-                disableButtons() {
-                    if (!this.isAdmin) {
-                        document.getElementById('joinRoomBtn').disabled = true;
-                    } else {
-                        document.getElementById('createRoomBtn').disabled = true;
-                    }
-                }
-
-                setupUIBindings() {
-                    if (this.isAdmin) {
-                        document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
-                    } else {
-                        document.getElementById('joinRoomBtn').addEventListener('click', () => this.joinRoom());
-                        document.getElementById('talkBtn').addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
-                        document.getElementById('talkBtn').addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
-                        document.getElementById('talkBtn').addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
-                        document.getElementById('talkBtn').addEventListener('mouseup', () => this.stopTalking());
-                    }
-                }
-
-                async testMicrophoneAccess() {
-                    try {
-                        this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                channelCount: 1,
-                                sampleRate: 16000
-                            } 
-                        });
-                        
-                        document.getElementById('micIndicator').classList.add('active');
-                        console.log('Microphone access granted');
-                        // Stop tracks immediately as we don't need persistent stream, only access check
-                        this.localStream.getTracks().forEach(track => track.stop());
-                        this.localStream = null;
-                        
-                    } catch (error) {
-                        console.error('Microphone access denied:', error);
-                        this.showError('Microphone access is required. Please allow microphone permissions.');
-                        document.getElementById('micIndicator').classList.remove('active');
-                    }
-                }
-
-                setupSocketListeners() {
-                    this.socket.on('room-created', (data) => {
-                        this.roomCode = data.roomCode;
-                        document.getElementById('roomCode').textContent = data.roomCode;
-                        this.showSuccess('Room created with code: ' + data.roomCode);
-                        // Removed: admin:fetch-recordings call
-                    });
-
-                    this.socket.on('room-joined', (data) => {
-                        this.roomCode = data.roomCode;
-                        this.userName = data.userName;
-                        document.getElementById('currentUserName').textContent = data.userName;
-                        document.getElementById('currentRoomCode').textContent = data.roomCode;
-                        document.getElementById('joinSection').classList.add('hidden');
-                        document.getElementById('chatSection').classList.remove('hidden');
-                        this.saveToLocalStorage();
-                        this.showSuccess('Successfully joined room: ' + data.roomCode);
-                        this.currentTalkingTo = data.adminId; 
-                    });
-
-                    this.socket.on('users-update', (users) => {
-                        if (this.isAdmin) {
-                            this.updateUsersList(users);
-                        }
-                    });
-
-                    this.socket.on('user-talking', (data) => {
-                        this.updateTalkingIndicator(data.userId, data.targetUserId, data.isTalking);
-                    });
-
-                    this.socket.on('audio-data', (data) => {
-                        // Only play if you are the target and not currently talking yourself
-                        if (this.isAdmin || data.targetUserId === this.socket.id) {
-                            if (!this.isTalking) {
-                                this.playAudio(data.audioBuffer, data.sampleRate);
-                            } else {
-                                console.log('Suppressing incoming audio while talking.');
-                            }
-                        }
-                    });
-                    
-                    // Removed: admin:recordings-list listener
-                    // Removed: admin:new-recording listener
-
-                    this.socket.on('user-left', (data) => {
-                        this.removeUserFromUI(data.userId);
-                        this.showMessage('User ' + data.userName + ' left the room');
-                    });
-
-                    this.socket.on('blocked', (data) => {
-                        this.showError(data.message);
-                        this.leaveRoom();
-                    });
-
-                    this.socket.on('room-closed', () => {
-                        this.showError('Room has been closed by admin');
-                        this.leaveRoom();
-                    });
-
-                    this.socket.on('error', (data) => {
-                        this.showError(data.message);
-                    });
-                    
-                    this.socket.on('user-blocked', (data) => {
-                        if (this.isAdmin) {
-                            this.blockedUsers.add(data.userName);
-                            this.updateBlockButton(data.userName, true);
-                            this.showSuccess('User ' + data.userName + ' has been blocked');
-                        }
-                    });
-
-                    this.socket.on('user-unblocked', (data) => {
-                        if (this.isAdmin) {
-                            this.blockedUsers.delete(data.userName);
-                            this.updateBlockButton(data.userName, false);
-                            this.showSuccess('User ' + data.userName + ' has been unblocked');
-                        }
-                    });
-                }
-
-                createRoom() {
-                    if (!this.socket.connected) {
-                        this.showError('Not connected to server');
-                        return;
-                    }
-                    this.socket.emit('create-room');
-                }
-
-                joinRoom() {
-                    const userNameInput = document.getElementById('userName');
-                    const roomCodeInput = document.getElementById('roomCode');
-                    const userName = userNameInput.value.trim();
-                    const roomCode = roomCodeInput.value.trim();
-
-                    if (!userName) {
-                        this.showError('Please enter your name');
-                        userNameInput.focus();
-                        return;
-                    }
-
-                    if (!roomCode || roomCode.length !== 4 || !/^\\d{4}$/.test(roomCode)) {
-                        this.showError('Please enter a valid 4-digit room code');
-                        roomCodeInput.focus();
-                        return;
-                    }
-
-                    this.userName = userName;
-                    this.socket.emit('join-room', { roomCode, userName });
-                }
-
-                // PTT Logic
-                async startTalking(targetUserId) {
-                    if (!this.roomCode || !this.socket.connected) {
-                        this.showError('Not connected to room');
-                        return;
-                    }
-                    
-                    if (!this.localStream) {
-                        await this.testMicrophoneAccess();
-                        if (!this.localStream) return;
-                    }
-
-                    // Admin must select a user, User automatically targets Admin
-                    const finalTargetId = this.isAdmin ? targetUserId : this.currentTalkingTo;
-                    if (!finalTargetId) {
-                         this.showError('No target selected or no admin in room.');
-                         return;
-                    }
-
-                    this.isTalking = true;
-                    this.currentTalkingTo = finalTargetId;
-                    
-                    // Update UI immediately
-                    if (!this.isAdmin) {
-                        document.getElementById('talkBtn').classList.add('talking');
-                        document.getElementById('talkBtn').textContent = 'RELEASE TO SEND';
-                        document.getElementById('userStatus').classList.add('active');
-                    } else {
-                        this.updateAdminTalkButtons(finalTargetId); // Update Admin UI state
-                    }
-                    
-                    // Start audio streaming (mic capture loop)
-                    await this.startAudioStreaming();
-
-                    // Notify server that transmission is starting
-                    this.socket.emit('start-talking', {
-                        targetUserId: finalTargetId,
-                        roomCode: this.roomCode,
-                        // Removed: startTime
-                    });
-                }
-
-                stopTalking() {
-                    if (!this.isTalking) return;
-                    
-                    this.isTalking = false;
-                    
-                    // Update UI immediately
-                    if (!this.isAdmin) {
-                        document.getElementById('talkBtn').classList.remove('talking');
-                        document.getElementById('talkBtn').textContent = 'HOLD TO TALK';
-                        document.getElementById('userStatus').classList.remove('active');
-                    } else {
-                        this.updateAdminTalkButtons(null); // Reset Admin UI state
-                    }
-
-                    // Stop audio streaming (mic capture loop)
-                    this.stopAudioStreaming();
-
-                    // Notify server that transmission has ended
-                    this.socket.emit('stop-talking', {
-                        roomCode: this.roomCode,
-                        // Removed: stopTime
-                    });
-                }
-
-                // --- AUDIO STREAMING (Sender) ---
-                async startAudioStreaming() {
-                    try {
-                        if (!this.localStream) {
-                            this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                                audio: {
-                                    echoCancellation: true,
-                                    noiseSuppression: true,
-                                    autoGainControl: true,
-                                    channelCount: 1,
-                                    sampleRate: 16000
-                                } 
-                            });
-                        }
-
-                        if (!this.audioContext) {
-                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                            // If context is suspended (common on mobile), resume it on first interaction
-                            if (this.audioContext.state === 'suspended') {
-                                this.audioContext.resume();
-                            }
-                        }
-
-                        this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
-                        // Buffer size 1024 is optimal for low latency
-                        this.scriptProcessor = this.audioContext.createScriptProcessor(1024, 1, 1);
-
-                        this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                            if (this.isTalking && this.socket.connected) {
-                                const inputBuffer = audioProcessingEvent.inputBuffer;
-                                const inputData = inputBuffer.getChannelData(0);
-                                
-                                // Convert 32-bit float to 16-bit PCM (Int16Array)
-                                const int16Data = new Int16Array(inputData.length);
-                                for (let i = 0; i < inputData.length; i++) {
-                                    int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-                                }
-                                
-                                // Send raw ArrayBuffer data for minimal latency
-                                this.socket.emit('audio-data', {
-                                    roomCode: this.roomCode,
-                                    audioBuffer: int16Data.buffer,
-                                    sampleRate: this.audioContext.sampleRate,
-                                    targetUserId: this.currentTalkingTo // Required for server-side routing
-                                });
-                            }
-                        };
-
-                        this.mediaStreamSource.connect(this.scriptProcessor);
-                        this.scriptProcessor.connect(this.audioContext.destination);
-                        
-                        console.log('Real-time audio streaming started');
-                    } catch (error) {
-                        console.error('Error starting audio streaming:', error);
-                        this.showError('Could not start microphone stream. Check permissions and try again.');
-                        this.stopTalking(); // Ensure state is reset
-                    }
-                }
-
-                stopAudioStreaming() {
-                    if (this.scriptProcessor) {
-                        this.scriptProcessor.disconnect();
-                        this.scriptProcessor = null;
-                    }
-                    if (this.mediaStreamSource) {
-                        this.mediaStreamSource.disconnect();
-                        this.mediaStreamSource = null;
-                    }
-                    // Do NOT stop localStream tracks here; keep them ready for next PTT press.
-                    console.log('Audio streaming stopped');
-                }
-                
-                // --- AUDIO PLAYBACK (Receiver) ---
-                playAudio(audioBuffer, sampleRate) {
-                    try {
-                        if (!this.audioContext) {
-                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                            if (this.audioContext.state === 'suspended') {
-                                this.audioContext.resume();
-                            }
-                        }
-
-                        const int16Data = new Int16Array(audioBuffer);
-                        const float32Data = new Float32Array(int16Data.length);
-                        
-                        // Convert 16-bit PCM back to 32-bit Float for playback
-                        for (let i = 0; i < int16Data.length; i++) {
-                            float32Data[i] = int16Data[i] / 32768;
-                        }
-
-                        // Create a new AudioBuffer
-                        const incomingAudioBuffer = this.audioContext.createBuffer(1, float32Data.length, sampleRate);
-                        incomingAudioBuffer.getChannelData(0).set(float32Data);
-
-                        // Create a new AudioBufferSourceNode
-                        const source = this.audioContext.createBufferSource();
-                        source.buffer = incomingAudioBuffer;
-                        source.connect(this.audioContext.destination);
-                        
-                        // Use a short delay for smooth queuing, but start playback as soon as possible
-                        source.start(0); 
-                        
-                        console.log('Playing received audio chunk');
-                    } catch (error) {
-                        console.error('Error playing audio:', error);
-                    }
-                }
-
-                addUserToUI(userId, userName) {
-                    if (!this.isAdmin) return;
-
-                    const usersList = document.getElementById('usersList');
-                    if (document.getElementById('user-' + userId)) return; // Already exists
-
-                    const userCircle = document.createElement('div');
-                    userCircle.className = 'user-circle';
-                    userCircle.id = 'user-' + userId;
-                    
-                    const isBlocked = this.blockedUsers.has(userName);
-
-                    userCircle.innerHTML = `
-                        <div class="user-avatar">${userName.charAt(0).toUpperCase()}</div>
-                        <div class="user-name">${userName}</div>
-                        <div class="user-status online"></div>
-                        <div class="user-controls">
-                            <button class="talk-btn-mini ${isBlocked ? 'blocked' : ''}" data-user-id="${userId}" data-user-name="${userName}">
-                                ${isBlocked ? 'Blocked' : 'Talk'}
-                            </button>
-                            <button class="block-btn" id="block-btn-${userName}" data-user-name="${userName}">
-                                ${isBlocked ? 'Unblock' : 'Block'}
-                            </button>
-                        </div>
-                    `;
-
-                    usersList.appendChild(userCircle);
-                    
-                    // Attach listeners
-                    const talkBtnMini = userCircle.querySelector('.talk-btn-mini');
-                    talkBtnMini.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.toggleAdminTalking(userId, userName, talkBtnMini);
-                    });
-                    
-                    const blockBtn = document.getElementById('block-btn-' + userName);
-                    blockBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.toggleBlockUser(userName);
-                    });
-                }
-                
-                toggleAdminTalking(targetUserId, targetUserName, buttonElement) {
-                     if (this.isTalking && this.currentTalkingTo === targetUserId) {
-                        this.stopTalking();
-                    } else {
-                        // If already talking to someone else, stop first
-                        if (this.isTalking) {
-                            this.stopTalking();
-                        }
-                        // Then start talking to the new user
-                        this.startTalking(targetUserId);
-                    }
-                    this.updateAdminTalkButtons(targetUserId);
-                }
-                
-                // --- START: GLOW IMPLEMENTATION ---
-                updateAdminTalkButtons(activeUserId) {
-                    // 1. Remove active target glow from all circles
-                    document.querySelectorAll('.user-circle').forEach(circle => {
-                        circle.classList.remove('admin-target'); 
-                    });
-                    
-                    // 2. Reset all button text
-                    document.querySelectorAll('.talk-btn-mini').forEach(btn => {
-                        btn.classList.remove('talking');
-                        // Ensure button text respects blocking status
-                        const userName = btn.getAttribute('data-user-name');
-                        if (!this.blockedUsers.has(userName)) {
-                            btn.textContent = 'Talk';
-                        }
-                    });
-                    
-                    // 3. Apply active state if Admin is talking
-                    if (this.isTalking && activeUserId) {
-                        const activeBtn = document.querySelector(\`.talk-btn-mini[data-user-id="\${activeUserId}"]\`);
-                        const activeCircle = document.getElementById('user-' + activeUserId);
-
-                        if (activeBtn) {
-                            activeBtn.classList.add('talking');
-                            activeBtn.textContent = 'STOP';
-                        }
-                        if (activeCircle) {
-                             activeCircle.classList.add('admin-target'); // Apply the glow/border
-                        }
-                    }
-                }
-                // --- END: GLOW IMPLEMENTATION ---
-
-
-                removeUserFromUI(userId) {
-                    const userElement = document.getElementById('user-' + userId);
-                    if (userElement) {
-                        userElement.remove();
-                    }
-                    // If the admin was talking to the user that left, stop talking
-                    if (this.isAdmin && this.currentTalkingTo === userId) {
-                        this.stopTalking();
-                    }
-                }
-
-                updateUsersList(users) {
-                    if (!this.isAdmin) return;
-                    
-                    const existingUserIds = new Set();
-                    document.getElementById('usersList').childNodes.forEach(node => {
-                        if (node.id) existingUserIds.add(node.id.replace('user-', ''));
-                    });
-                    
-                    // Add new users
-                    users.forEach(user => {
-                        this.addUserToUI(user.id, user.name);
-                        existingUserIds.delete(user.id);
-                    });
-                    
-                    // Remove users who have left
-                    existingUserIds.forEach(userId => {
-                        this.removeUserFromUI(userId);
-                    });
-                    
-                    this.updateAdminTalkButtons(this.currentTalkingTo);
-                }
-
-                updateTalkingIndicator(userId, targetUserId, isTalking) {
-                    if (this.isAdmin) {
-                        const userCircle = document.getElementById('user-' + userId);
-                        if (userCircle) {
-                            // Indicator when a user is speaking (green border)
-                            userCircle.classList.toggle('talking', isTalking && userId !== this.socket.id);
-                            
-                            // Indicator when this user is the one receiving (red glow/border)
-                            userCircle.classList.toggle('receiving', isTalking && targetUserId === userId && userId !== this.socket.id);
-                        }
-                    } else {
-                        const adminStatus = document.getElementById('adminStatus');
-                        const talkBtn = document.getElementById('talkBtn');
-                        
-                        if (adminStatus && talkBtn) {
-                             // If Admin is talking TO THIS user, show active Admin status
-                            const isIncomingAdminSpeech = isTalking && userId === this.currentTalkingTo && targetUserId === this.socket.id;
-                            
-                            adminStatus.classList.toggle('active', isIncomingAdminSpeech);
-                            talkBtn.disabled = isIncomingAdminSpeech; // Disable PTT while receiving
-                            
-                            if (isIncomingAdminSpeech) {
-                                talkBtn.textContent = 'RECEIVING...';
-                            } else if (!this.isTalking) {
-                                talkBtn.textContent = 'HOLD TO TALK';
-                            }
-                        }
-                    }
-                }
-
-                toggleBlockUser(userName) {
-                    if (this.isAdmin && this.roomCode) {
-                        this.socket.emit('toggle-block-user', {
-                            roomCode: this.roomCode,
-                            userName: userName
-                        });
-                    }
-                }
-
-                updateBlockButton(userName, isBlocked) {
-                    const blockBtn = document.getElementById('block-btn-' + userName);
-                    const talkBtnMini = document.querySelector(\`.talk-btn-mini[data-user-name="\${userName}"]\`);
-
-                    if (blockBtn) {
-                        blockBtn.textContent = isBlocked ? 'Unblock' : 'Block';
-                        blockBtn.classList.toggle('blocked', !isBlocked); // Block button is RED, unblock button is GREEN
-                    }
-                    if (talkBtnMini) {
-                        talkBtnMini.textContent = isBlocked ? 'Blocked' : 'Talk';
-                        talkBtnMini.classList.toggle('blocked', isBlocked);
-                        talkBtnMini.disabled = isBlocked;
-                        
-                        // If admin was talking to this user, stop
-                        if (isBlocked && this.currentTalkingTo === talkBtnMini.getAttribute('data-user-id')) {
-                            this.stopTalking();
-                        }
-                        this.updateAdminTalkButtons(this.currentTalkingTo); // Re-evaluate active talk state
-                    }
-                }
-                
-                // Removed: Recording logic methods (renderRecordings, addRecordingToUI)
-
-
-                leaveRoom() {
-                    this.stopAudioStreaming();
-                    
-                    if (this.localStream) {
-                        this.localStream.getTracks().forEach(track => track.stop());
-                        this.localStream = null;
-                    }
-
-                    if (this.isAdmin) {
-                        document.getElementById('roomCode').textContent = '----';
-                        document.getElementById('usersList').innerHTML = '';
-                        // Removed: recordingsList cleanup
-                    } else {
-                        document.getElementById('joinSection').classList.remove('hidden');
-                        document.getElementById('chatSection').classList.add('hidden');
-                        document.getElementById('talkBtn').textContent = 'HOLD TO TALK';
-                        document.getElementById('talkBtn').classList.remove('talking');
-                        document.getElementById('userStatus').classList.remove('active');
-                        document.getElementById('adminStatus').classList.remove('active');
-                    }
-                    this.roomCode = null;
-                    this.userName = null;
-                    localStorage.removeItem('walkieRoomCode');
-                    localStorage.removeItem('walkieUserName');
-                }
-
-                showMessage(message) {
-                    console.log(message);
-                }
-
-                showSuccess(message) {
-                    const successElement = document.getElementById('successMessage');
-                    if (successElement) {
-                        successElement.textContent = message;
-                        successElement.classList.remove('hidden');
-                        setTimeout(() => {
-                            successElement.classList.add('hidden');
-                        }, 3000);
-                    }
-                }
-
-                showError(message) {
-                    const errorElement = document.getElementById('errorMessage');
-                    if (errorElement) {
-                        errorElement.textContent = message;
-                        errorElement.classList.remove('hidden');
-                        setTimeout(() => {
-                            errorElement.classList.add('hidden');
-                        }, 5000);
-                    }
-                }
-            }
-    `;
-}
-
-// User page route
+// Route 3: User Page
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -1008,7 +978,8 @@ app.get('/', (req, res) => {
         <div class="success-message hidden" id="successMessage"></div>
     </div>
 
-    ${getCommonScript()}
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/client.js"></script>
     <script>
         // Start the User application
         window.onload = () => {
@@ -1020,7 +991,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Admin page route
+// Route 4: Admin Page
 app.get('/admin', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -1058,7 +1029,7 @@ app.get('/admin', (req, res) => {
             padding: 8px 16px; 
             border-radius: 6px; 
         }
-        .users-container, .recordings-container { 
+        .users-container { 
             padding: 20px; 
             border-top: 1px solid #ecf0f1;
         }
@@ -1071,7 +1042,7 @@ app.get('/admin', (req, res) => {
         .user-circle { 
             background: #f8f9fa; 
             border: 2px solid #e9ecef; 
-            border-radius: 12px; /* Square user cards */
+            border-radius: 12px; 
             padding: 12px; 
             text-align: center; 
             position: relative;
@@ -1085,13 +1056,11 @@ app.get('/admin', (req, res) => {
             border-color: #3498db;
             background: #e3f2fd;
         }
-        /* --- ADMIN TARGET GLOW CSS --- */
+        /* ADMIN TARGET GLOW CSS */
         .user-circle.admin-target {
-            border-color: #3498db; /* Blue glow for active targeting */
+            border-color: #3498db; 
             box-shadow: 0 0 15px rgba(52, 152, 219, 0.7);
         }
-        /* --- END ADMIN TARGET GLOW CSS --- */
-        
         /* User is talking to admin */
         .user-circle.talking { 
             border-color: #27ae60; 
@@ -1188,13 +1157,12 @@ app.get('/admin', (req, res) => {
             </div>
         </div>
         
-        <!-- Removed: Recordings Container -->
-
         <div class="error-message hidden" id="errorMessage"></div>
         <div class="success-message hidden" id="successMessage"></div>
     </div>
     
-    ${getCommonScript()}
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/client.js"></script>
     <script>
         // Start the Admin application
         window.onload = () => {
@@ -1213,7 +1181,6 @@ io.on('connection', (socket) => {
   // Admin creates room
   socket.on('create-room', () => {
     const roomCode = generateRoomCode();
-    // Check if the user is already an admin of a room
     const existingRoom = Array.from(rooms.values()).find(r => r.admin === socket.id);
     if (existingRoom) {
          socket.leave(existingRoom.code);
@@ -1224,8 +1191,8 @@ io.on('connection', (socket) => {
     const room = {
       code: roomCode,
       admin: socket.id,
-      users: new Map(), // Non-admin users
-      blockedUsers: new Set(), // Store by userName
+      users: new Map(),
+      blockedUsers: new Set(),
       adminName: 'Admin'
     };
     rooms.set(roomCode, room);
@@ -1246,7 +1213,6 @@ io.on('connection', (socket) => {
       return;
     }
     if (socket.id === room.admin) {
-        // Admin rejoining, just update their socket state
         socket.join(roomCode);
         return;
     }
@@ -1256,7 +1222,6 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Check for existing user with the same name
     const existingUser = Array.from(room.users.values()).find(user => user.name === userName);
     if (existingUser) {
       socket.emit('error', { message: 'User name already exists in this room. Please choose a different name.' });
@@ -1272,14 +1237,13 @@ io.on('connection', (socket) => {
     socket.join(roomCode);
     socket.emit('room-joined', { roomCode, userName, adminId: room.admin });
     
-    // Send updated user list to Admin
     const users = Array.from(room.users.values());
     io.to(room.admin).emit('users-update', users);
   });
 
   // Start talking
   socket.on('start-talking', (data) => {
-    const { targetUserId, roomCode } = data; // Removed: startTime
+    const { targetUserId, roomCode } = data;
 
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -1291,7 +1255,6 @@ io.on('connection', (socket) => {
     
     let receiverId = targetUserId;
     if (!isSenderAdmin) {
-        // User is talking to Admin
         if (targetUserId !== room.admin) {
             socket.emit('error', { message: 'You can only talk to the Admin.' });
             return;
@@ -1299,9 +1262,6 @@ io.on('connection', (socket) => {
         receiverId = room.admin;
     }
     
-    // Removed: Initialize recording buffer
-    
-    // Notify all in room about who is talking to whom
     io.to(roomCode).emit('user-talking', {
       userId: socket.id,
       targetUserId: receiverId,
@@ -1311,14 +1271,11 @@ io.on('connection', (socket) => {
 
   // Stop talking
   socket.on('stop-talking', (data) => {
-    const { roomCode } = data; // Removed: stopTime
+    const { roomCode } = data;
 
     const room = rooms.get(roomCode);
     if (!room) return;
     
-    // Removed: Finalize recording logic
-    
-    // Notify all to stop talking indicators
     io.to(roomCode).emit('user-talking', {
       userId: socket.id,
       isTalking: false
@@ -1346,8 +1303,6 @@ io.on('connection', (socket) => {
         return;
     }
     
-    // Removed: Record the data (step 1)
-    
     // Stream the data to receiver
     io.to(receiverId).emit('audio-data', {
         audioBuffer: audioBuffer,
@@ -1357,8 +1312,6 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Removed: Admin Request to fetch recordings handler
-
   // Toggle block user (Admin only)
   socket.on('toggle-block-user', (data) => {
     const { roomCode, userName } = data;
@@ -1377,7 +1330,7 @@ io.on('connection', (socket) => {
         // Find and kick blocked user
         const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
         if (userEntry) {
-          const [userId, user] = userEntry;
+          const [userId] = userEntry;
           io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
           room.users.delete(userId);
           
@@ -1394,19 +1347,15 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     console.log('User disconnected:', socket.id, 'Reason:', reason);
     
-    // Removed: Cleanup for incomplete recordings
-    
     for (const [roomCode, room] of rooms.entries()) {
       if (room.admin === socket.id) {
         // Admin disconnected: close the entire room
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
-        // Removed: recordings cleanup
         break;
       } else if (room.users.has(socket.id)) {
         // Regular user disconnected
-        const user = room.users.get(socket.id);
         room.users.delete(socket.id);
         
         // Update user list for admin
