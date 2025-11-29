@@ -10,13 +10,13 @@ const io = socketIo(server, {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  maxHttpBufferSize: 1e6 // 1MB limit
+  maxHttpBufferSize: 1e6 
 });
 
 // Store rooms and users globally
 const rooms = new Map();
 
-// NEW: In-memory storage for transmission logs (replaces external DB for recordings)
+// In-memory storage for transmission logs (replaces external DB for recordings)
 // Structure: Map<roomCode, Array<LogEntry>>
 const transmissionLogs = new Map();
 
@@ -53,7 +53,6 @@ function getClientScriptContent() {
                     this.reconnectTimeout = null;
                     this.blockedUsers = new Set();
                     
-                    // New recording properties
                     this.mediaRecorder = null;
                     this.audioChunks = [];
                     this.isCapturing = false;
@@ -235,7 +234,6 @@ function getClientScriptContent() {
                         
                         const talkBtn = document.getElementById('talkBtn');
                         if (talkBtn) {
-                            // PTT events: touchstart/touchend for mobile, mousedown/mouseup for desktop
                             talkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
                             talkBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
                             talkBtn.addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
@@ -271,7 +269,6 @@ function getClientScriptContent() {
                         this.roomCode = data.roomCode;
                         document.getElementById('roomCode').textContent = data.roomCode;
                         this.showSuccess('Room created with code: ' + data.roomCode);
-                        // Admin joins room, fetch logs
                         this.socket.emit('fetch-logs', { roomCode: this.roomCode });
                     });
 
@@ -285,7 +282,6 @@ function getClientScriptContent() {
                         this.saveToLocalStorage();
                         this.showSuccess('Successfully joined room: ' + data.roomCode);
                         this.currentTalkingTo = data.adminId;
-                        // User joins room, fetch logs 
                         this.socket.emit('fetch-logs', { roomCode: this.roomCode });
                     });
 
@@ -295,7 +291,6 @@ function getClientScriptContent() {
                         }
                     });
                     
-                    // NEW: Update console when new logs arrive
                     this.socket.on('logs-update', (data) => {
                         if (this.roomCode === data.roomCode) {
                             this.renderLogConsole(data.logs);
@@ -307,11 +302,13 @@ function getClientScriptContent() {
                     });
 
                     this.socket.on('audio-data', (data) => {
-                        if (this.isAdmin || data.targetUserId === this.socket.id) {
+                        // FIX: Playback for both sender and receiver
+                        // If the receiving socket is the sender (socket.id === data.senderId), play the echo.
+                        // If the receiving socket is the target (socket.id === data.targetUserId), play the audio.
+                        if (this.socket.id === data.senderId || this.socket.id === data.targetUserId) {
+                             // Only play if we are not currently pressing PTT (isTalking is for the local user)
                             if (!this.isTalking) {
                                 this.playAudio(data.audioBuffer, data.sampleRate);
-                            } else {
-                                console.log('Suppressing incoming audio while talking.');
                             }
                         }
                     });
@@ -459,12 +456,12 @@ function getClientScriptContent() {
                     });
                 }
 
-                // --- NEW RECORDING CAPTURE LOGIC (Client-side) ---
+                // --- RECORDING CAPTURE LOGIC (Client-side) ---
                 startRecordingCapture() {
                     if (this.mediaRecorder && this.mediaRecorder.state === 'recording') return;
                     
                     this.audioChunks = [];
-                    // We must use the audio stream from MediaRecorder, not the scriptProcessor stream
+                    // Use the microphone stream directly for recording
                     this.mediaRecorder = new MediaRecorder(this.localStream, { mimeType: 'audio/webm' });
                     
                     this.mediaRecorder.ondataavailable = (event) => {
@@ -491,7 +488,6 @@ function getClientScriptContent() {
                     return new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onloadend = () => {
-                            // Extract Base64 part: 'data:audio/webm;base64,...'
                             resolve(reader.result.split(',')[1]);
                         };
                         reader.onerror = reject;
@@ -508,7 +504,7 @@ function getClientScriptContent() {
                         senderName: this.userName,
                         receiverName: finalTargetName,
                         timestamp: Date.now(),
-                        audioBase64: base64Audio, // Stored for playback
+                        audioBase64: base64Audio, 
                         mimeType: audioBlob.type
                     };
 
@@ -517,13 +513,17 @@ function getClientScriptContent() {
                 
                 getDisplayName(userId) {
                     if (this.isAdmin) {
-                        const user = this.users.find(u => u.id === userId);
+                        // Admin looks up user by ID
+                        const user = Array.from(this.users || []).find(u => u.id === userId);
                         return user ? user.name : 'Unknown User';
+                    } else if (userId === this.currentTalkingTo) {
+                        // User is sending to Admin
+                        return 'Admin'; 
                     } else {
-                        return 'Admin'; // User always talks to Admin
+                        return 'Unknown';
                     }
                 }
-                // --- END NEW RECORDING CAPTURE LOGIC ---
+                // --- END RECORDING CAPTURE LOGIC ---
 
 
                 // --- AUDIO STREAMING (Sender) ---
@@ -553,7 +553,8 @@ function getClientScriptContent() {
                                     roomCode: this.roomCode,
                                     audioBuffer: int16Data.buffer,
                                     sampleRate: this.audioContext.sampleRate,
-                                    targetUserId: this.currentTalkingTo
+                                    targetUserId: this.currentTalkingTo,
+                                    senderId: this.socket.id // Include sender ID for self-playback logic on receiver side
                                 });
                             }
                         };
@@ -577,12 +578,9 @@ function getClientScriptContent() {
                         this.mediaStreamSource.disconnect();
                         this.mediaStreamSource = null;
                     }
-                    if (this.localStream) {
-                        // Crucially, we do NOT stop the tracks on the localStream here, allowing quick re-use.
-                    }
                 }
                 
-                // --- AUDIO PLAYBACK (Receiver) ---
+                // --- AUDIO PLAYBACK (Receiver/Sender Echo) ---
                 playAudio(audioBuffer, sampleRate) {
                     try {
                         if (!this.audioContext) {
@@ -612,7 +610,7 @@ function getClientScriptContent() {
                     }
                 }
                 
-                // --- NEW CONSOLE RENDERING LOGIC ---
+                // --- CONSOLE RENDERING LOGIC ---
                 renderLogConsole(logs) {
                     const consoleEl = document.getElementById('transmissionConsole');
                     if (!consoleEl) return;
@@ -630,6 +628,7 @@ function getClientScriptContent() {
                         const isSender = log.senderName === this.userName;
                         const time = new Date(log.timestamp).toLocaleTimeString();
                         const targetName = isSender ? log.receiverName : log.senderName;
+                        const direction = isSender ? 'TO' : 'FROM';
 
                         const item = document.createElement('div');
                         item.className = \`log-item p-3 mb-2 rounded-lg \${isSender ? 'bg-indigo-500 text-white shadow-md' : 'bg-white border border-gray-200'}\`;
@@ -637,7 +636,7 @@ function getClientScriptContent() {
                         item.innerHTML = \`
                             <div class="flex justify-between items-center">
                                 <p class="text-sm font-semibold">
-                                    \${isSender ? 'TO' : 'FROM'}: \${targetName}
+                                    \${direction}: \${targetName}
                                 </p>
                                 <button class="play-log-btn \${isSender ? 'bg-indigo-400 hover:bg-indigo-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-800' } p-1 rounded-full text-xs transition-colors duration-150"
                                         data-base64="\${log.audioBase64}"
@@ -660,8 +659,9 @@ function getClientScriptContent() {
                             new Audio(audioUrl).play().catch(err => console.error("Playback error:", err));
                         });
                     });
+                    consoleEl.scrollTop = consoleEl.scrollHeight; // Scroll to bottom on update
                 }
-                // --- END NEW CONSOLE RENDERING LOGIC ---
+                // --- END CONSOLE RENDERING LOGIC ---
 
                 addUserToUI(userId, userName) {
                     if (!this.isAdmin) return;
@@ -756,10 +756,9 @@ function getClientScriptContent() {
                 updateUsersList(users) {
                     if (!this.isAdmin) return;
                     
-                    // Simple re-render for clean list state
                     const usersList = document.getElementById('usersList');
                     usersList.innerHTML = '';
-                    this.users = users; // Store users list globally for display name lookup
+                    this.users = users; 
                     
                     users.forEach(user => {
                         this.addUserToUI(user.id, user.name);
@@ -854,6 +853,10 @@ function getClientScriptContent() {
                     this.userName = null;
                     localStorage.removeItem('walkieRoomCode');
                     localStorage.removeItem('walkieUserName');
+                    
+                    // Clear console display
+                    const consoleEl = document.getElementById('transmissionConsole');
+                    if (consoleEl) consoleEl.innerHTML = '<p class="text-center text-gray-500 italic text-sm py-4">Waiting to connect to room...</p>';
                 }
 
                 showMessage(message) {
@@ -1090,7 +1093,7 @@ function getCommonStyles() {
             @keyframes glow-red { 
                 0% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
                 50% { box-shadow: 0 0 15px rgba(231, 76, 60, 0.7); } 
-                100% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
+                100% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.7); } 
             }
             .user-avatar { 
                 font-size: 24px; 
@@ -1334,7 +1337,7 @@ io.on('connection', (socket) => {
     io.to(room.admin).emit('users-update', users);
   });
 
-  // NEW: Handle client-side log transmission
+  // Handle client-side log transmission
   socket.on('log-transmission', (logEntry) => {
       if (!transmissionLogs.has(logEntry.roomCode)) {
           transmissionLogs.set(logEntry.roomCode, []);
@@ -1348,7 +1351,7 @@ io.on('connection', (socket) => {
       });
   });
   
-  // NEW: Handle log request from client (on join/reconnect)
+  // Handle log request from client (on join/reconnect)
   socket.on('fetch-logs', (data) => {
       const logs = transmissionLogs.get(data.roomCode) || [];
       socket.emit('logs-update', {
@@ -1401,7 +1404,7 @@ io.on('connection', (socket) => {
 
   // Real-time audio data streaming
   socket.on('audio-data', (data) => {
-    const { roomCode, audioBuffer, sampleRate, targetUserId } = data;
+    const { roomCode, audioBuffer, sampleRate, targetUserId, senderId } = data;
 
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -1420,12 +1423,16 @@ io.on('connection', (socket) => {
         return;
     }
     
-    // Stream the data to receiver
-    io.to(receiverId).emit('audio-data', {
-        audioBuffer: audioBuffer,
-        sampleRate: sampleRate,
-        senderId: socket.id,
-        targetUserId: receiverId 
+    // Broadcast to the intended receiver AND the original sender (for echo/self-playback)
+    const socketsToReceive = new Set([receiverId, senderId]);
+
+    socketsToReceive.forEach(id => {
+        io.to(id).emit('audio-data', {
+            audioBuffer: audioBuffer,
+            sampleRate: sampleRate,
+            senderId: senderId,
+            targetUserId: receiverId // Still useful for user UI logic
+        });
     });
   });
   
@@ -1437,21 +1444,17 @@ io.on('connection', (socket) => {
     
     if (room && socket.id === room.admin) {
       if (room.blockedUsers.has(userName)) {
-        // Unblock user
         room.blockedUsers.delete(userName);
         io.to(room.admin).emit('user-unblocked', { userName: userName });
       } else {
-        // Block user
         room.blockedUsers.add(userName);
         
-        // Find and kick blocked user
         const userEntry = Array.from(room.users.entries()).find(([id, user]) => user.name === userName);
         if (userEntry) {
           const [userId] = userEntry;
           io.to(userId).emit('blocked', { message: 'You have been blocked by admin' });
           room.users.delete(userId);
           
-          // Update user list for admin
           io.to(room.admin).emit('users-update', Array.from(room.users.values()));
         }
         
@@ -1466,17 +1469,14 @@ io.on('connection', (socket) => {
     
     for (const [roomCode, room] of rooms.entries()) {
       if (room.admin === socket.id) {
-        // Admin disconnected: close the entire room
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
-        transmissionLogs.delete(roomCode); // Clean up logs
+        transmissionLogs.delete(roomCode); 
         break;
       } else if (room.users.has(socket.id)) {
-        // Regular user disconnected
         room.users.delete(socket.id);
         
-        // Update user list for admin
         io.to(room.admin).emit('users-update', Array.from(room.users.values()));
         break;
       }
