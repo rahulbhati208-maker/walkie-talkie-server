@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const Buffer = require('buffer').Buffer;
+// Removed: const Buffer = require('buffer').Buffer;
 
 const app = express();
 const server = http.createServer(app);
@@ -11,17 +11,16 @@ const io = socketIo(server, {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  maxHttpBufferSize: 1e8 // 100MB limit
+  // Reduced maxHttpBufferSize since we are no longer uploading large recorded files
+  maxHttpBufferSize: 1e6 // 1MB limit for safety
 });
 
 // Store rooms and users globally
 const rooms = new Map();
 
-// Store active recording buffers (socket.id -> [Buffer array])
-let currentRecordings = new Map();
+// Removed: currentRecordings map
+// Removed: recordings map
 
-// Store finalized recordings (roomId -> [{senderName, receiverName, timestamp, audioBase64}])
-const recordings = new Map();
 
 /**
  * Generates a unique 4-digit room code.
@@ -35,50 +34,7 @@ function generateRoomCode() {
   return code;
 }
 
-/**
- * Encodes raw PCM 16-bit, mono audio data into a standard WAV file format.
- * @param {ArrayBuffer} pcmData - The raw 16-bit PCM audio data.
- * @param {number} sampleRate - The sample rate of the audio (e.g., 16000).
- * @returns {Buffer} The complete WAV file buffer.
- */
-function encodeWAV(pcmData, sampleRate) {
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const dataSize = pcmData.byteLength;
-    const buffer = Buffer.alloc(44 + dataSize);
-    
-    // Helper function to write a string to the buffer
-    function writeString(str, offset) {
-        for (let i = 0; i < str.length; i++) {
-            buffer.writeUInt8(str.charCodeAt(i), offset + i);
-        }
-    }
-
-    // 1. RIFF chunk
-    writeString('RIFF', 0); // Chunk ID
-    buffer.writeUInt32LE(36 + dataSize, 4); // Chunk size (file size - 8)
-    writeString('WAVE', 8); // Format
-
-    // 2. fmt sub-chunk
-    writeString('fmt ', 12); // Sub-chunk 1 ID
-    buffer.writeUInt32LE(16, 16); // Sub-chunk 1 size (16 for PCM)
-    buffer.writeUInt16LE(1, 20); // Audio format (1 for PCM)
-    buffer.writeUInt16LE(numChannels, 22); // Number of channels
-    buffer.writeUInt32LE(sampleRate, 24); // Sample rate
-    buffer.writeUInt32LE(sampleRate * numChannels * bytesPerSample, 28); // Byte rate
-    buffer.writeUInt16LE(numChannels * bytesPerSample, 32); // Block alignment
-    buffer.writeUInt16LE(bitsPerSample, 34); // Bits per sample
-
-    // 3. data sub-chunk
-    writeString('data', 36); // Sub-chunk 2 ID
-    buffer.writeUInt32LE(dataSize, 40); // Sub-chunk 2 size (data size)
-    
-    // Write PCM data
-    Buffer.from(pcmData).copy(buffer, 44);
-
-    return buffer;
-}
+// Removed: encodeWAV function
 
 
 // --- Serve HTML Pages ---
@@ -326,11 +282,6 @@ function getCommonScript() {
                                 userName: this.userName 
                             });
                         }
-                        
-                        if (this.isAdmin && this.roomCode) {
-                             // Admin reconnecting: request recordings list
-                            this.socket.emit('admin:fetch-recordings', { roomCode: this.roomCode });
-                        }
                     });
 
                     this.socket.on('disconnect', (reason) => {
@@ -481,7 +432,7 @@ function getCommonScript() {
                         this.roomCode = data.roomCode;
                         document.getElementById('roomCode').textContent = data.roomCode;
                         this.showSuccess('Room created with code: ' + data.roomCode);
-                        this.socket.emit('admin:fetch-recordings', { roomCode: this.roomCode }); // Fetch empty list
+                        // Removed: admin:fetch-recordings call
                     });
 
                     this.socket.on('room-joined', (data) => {
@@ -493,7 +444,6 @@ function getCommonScript() {
                         document.getElementById('chatSection').classList.remove('hidden');
                         this.saveToLocalStorage();
                         this.showSuccess('Successfully joined room: ' + data.roomCode);
-                        // User automatically talks to Admin (socket.id is not available yet, but admin will be the default target)
                         this.currentTalkingTo = data.adminId; 
                     });
 
@@ -518,18 +468,8 @@ function getCommonScript() {
                         }
                     });
                     
-                    this.socket.on('admin:recordings-list', (data) => {
-                        if (this.isAdmin) {
-                            this.renderRecordings(data.recordings);
-                        }
-                    });
-                    
-                    this.socket.on('admin:new-recording', (data) => {
-                        if (this.isAdmin) {
-                            this.addRecordingToUI(data.recording);
-                            this.showSuccess('New recording saved!');
-                        }
-                    });
+                    // Removed: admin:recordings-list listener
+                    // Removed: admin:new-recording listener
 
                     this.socket.on('user-left', (data) => {
                         this.removeUserFromUI(data.userId);
@@ -635,7 +575,7 @@ function getCommonScript() {
                     this.socket.emit('start-talking', {
                         targetUserId: finalTargetId,
                         roomCode: this.roomCode,
-                        startTime: Date.now()
+                        // Removed: startTime
                     });
                 }
 
@@ -659,7 +599,7 @@ function getCommonScript() {
                     // Notify server that transmission has ended
                     this.socket.emit('stop-talking', {
                         roomCode: this.roomCode,
-                        stopTime: Date.now()
+                        // Removed: stopTime
                     });
                 }
 
@@ -706,7 +646,7 @@ function getCommonScript() {
                                     roomCode: this.roomCode,
                                     audioBuffer: int16Data.buffer,
                                     sampleRate: this.audioContext.sampleRate,
-                                    targetUserId: this.currentTalkingTo // Required for server-side routing and recording
+                                    targetUserId: this.currentTalkingTo // Required for server-side routing
                                 });
                             }
                         };
@@ -954,63 +894,7 @@ function getCommonScript() {
                     }
                 }
                 
-                // --- Recording Logic (Admin Only) ---
-                renderRecordings(recs) {
-                    if (!this.isAdmin) return;
-                    const container = document.getElementById('recordingsList');
-                    container.innerHTML = '';
-                    
-                    if (recs.length === 0) {
-                        container.innerHTML = '<p class="text-gray-500 text-sm italic">No recordings yet.</p>';
-                        return;
-                    }
-                    
-                    recs.sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
-
-                    recs.forEach(rec => this.addRecordingToUI(rec));
-                }
-                
-                addRecordingToUI(rec) {
-                    if (!this.isAdmin) return;
-                    const container = document.getElementById('recordingsList');
-                    
-                    // Remove "No recordings yet" message if present
-                    const noRecs = container.querySelector('p.italic');
-                    if (noRecs) noRecs.remove();
-                    
-                    const time = new Date(rec.timestamp).toLocaleTimeString();
-                    const date = new Date(rec.timestamp).toLocaleDateString();
-                    const duration = (rec.duration / 1000).toFixed(1) + 's';
-                    
-                    const item = document.createElement('div');
-                    item.className = 'recording-item p-3 mb-2 bg-gray-50 border border-gray-200 rounded-lg flex justify-between items-center';
-                    item.innerHTML = `
-                        <div>
-                            <p class="font-medium text-sm text-gray-800">${rec.senderName} ↔ ${rec.receiverName}</p>
-                            <p class="text-xs text-gray-500">${date} at ${time} (${duration})</p>
-                        </div>
-                        <button class="play-rec-btn bg-indigo-500 hover:bg-indigo-600 text-white p-2 rounded-full text-xs"
-                                data-base64="${rec.audioBase64}">
-                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
-                        </button>
-                    `;
-                    
-                    // Prepend new recording to the list (newest first)
-                    if (container.firstChild) {
-                        container.insertBefore(item, container.firstChild);
-                    } else {
-                        container.appendChild(item);
-                    }
-                    
-                    // Attach click listener for playback
-                    item.querySelector('.play-rec-btn').addEventListener('click', (e) => {
-                        const base64 = e.currentTarget.getAttribute('data-base64');
-                        if (base64) {
-                            const audioUrl = `data:audio/wav;base64,${base64}`;
-                            new Audio(audioUrl).play().catch(err => console.error("Playback error:", err));
-                        }
-                    });
-                }
+                // Removed: Recording logic methods (renderRecordings, addRecordingToUI)
 
 
                 leaveRoom() {
@@ -1024,7 +908,7 @@ function getCommonScript() {
                     if (this.isAdmin) {
                         document.getElementById('roomCode').textContent = '----';
                         document.getElementById('usersList').innerHTML = '';
-                        document.getElementById('recordingsList').innerHTML = '';
+                        // Removed: recordingsList cleanup
                     } else {
                         document.getElementById('joinSection').classList.remove('hidden');
                         document.getElementById('chatSection').classList.add('hidden');
@@ -1201,12 +1085,12 @@ app.get('/admin', (req, res) => {
             border-color: #3498db;
             background: #e3f2fd;
         }
-        /* --- ADDED GLOW CSS for Admin Target --- */
+        /* --- ADMIN TARGET GLOW CSS --- */
         .user-circle.admin-target {
             border-color: #3498db; /* Blue glow for active targeting */
             box-shadow: 0 0 15px rgba(52, 152, 219, 0.7);
         }
-        /* --- END ADDED GLOW CSS --- */
+        /* --- END ADMIN TARGET GLOW CSS --- */
         
         /* User is talking to admin */
         .user-circle.talking { 
@@ -1214,7 +1098,7 @@ app.get('/admin', (req, res) => {
             background: #d5f4e6; 
             box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
         }
-        /* Admin is talking to this user (Target) */
+        /* User is the one receiving (red glow/border) */
         .user-circle.receiving { 
             border-color: #e74c3c; 
             background: #fadbd8; 
@@ -1304,14 +1188,7 @@ app.get('/admin', (req, res) => {
             </div>
         </div>
         
-        <!-- NEW RECORDINGS CONTAINER -->
-        <div class="recordings-container">
-            <h2>Recent Recordings (Admin/User Audio)</h2>
-            <div id="recordingsList" class="max-h-64 overflow-y-auto pr-2">
-                <p class="text-gray-500 text-sm italic">Connect to a room to view recordings.</p>
-            </div>
-        </div>
-        <!-- END NEW RECORDINGS CONTAINER -->
+        <!-- Removed: Recordings Container -->
 
         <div class="error-message hidden" id="errorMessage"></div>
         <div class="success-message hidden" id="successMessage"></div>
@@ -1400,9 +1277,9 @@ io.on('connection', (socket) => {
     io.to(room.admin).emit('users-update', users);
   });
 
-  // Start talking & Recording start
+  // Start talking
   socket.on('start-talking', (data) => {
-    const { targetUserId, roomCode, startTime } = data;
+    const { targetUserId, roomCode } = data; // Removed: startTime
 
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -1422,17 +1299,7 @@ io.on('connection', (socket) => {
         receiverId = room.admin;
     }
     
-    // Initialize recording buffer
-    currentRecordings.set(socket.id, {
-        buffer: [],
-        sampleRate: 0,
-        senderId: socket.id,
-        senderName: speaker.name,
-        receiverId: receiverId,
-        receiverName: receiverId === room.admin ? 'Admin' : (room.users.get(receiverId)?.name || 'Unknown User'),
-        startTime: startTime,
-        roomCode: roomCode
-    });
+    // Removed: Initialize recording buffer
     
     // Notify all in room about who is talking to whom
     io.to(roomCode).emit('user-talking', {
@@ -1442,45 +1309,14 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Stop talking & Recording finalize
+  // Stop talking
   socket.on('stop-talking', (data) => {
-    const { roomCode, stopTime } = data;
+    const { roomCode } = data; // Removed: stopTime
 
     const room = rooms.get(roomCode);
     if (!room) return;
     
-    // Finalize recording
-    const recData = currentRecordings.get(socket.id);
-    if (recData && recData.roomCode === roomCode) {
-        
-        const finalBuffer = Buffer.concat(recData.buffer);
-        
-        // Only save audio longer than 0.5s (to filter accidental clicks)
-        if (finalBuffer.byteLength > 16000 * 2 * 0.5) { // 16000 SR * 2 bytes/sample * 0.5s
-            
-            const wavBuffer = encodeWAV(finalBuffer, recData.sampleRate);
-            const audioBase64 = wavBuffer.toString('base64');
-            
-            const recording = {
-                timestamp: stopTime,
-                duration: stopTime - recData.startTime,
-                senderName: recData.senderName,
-                receiverName: recData.receiverName,
-                audioBase64: audioBase64
-            };
-            
-            // Store recording
-            if (!recordings.has(roomCode)) {
-                recordings.set(roomCode, []);
-            }
-            recordings.get(roomCode).push(recording);
-            
-            // Notify Admin of new recording
-            io.to(room.admin).emit('admin:new-recording', { recording });
-        }
-        
-        currentRecordings.delete(socket.id);
-    }
+    // Removed: Finalize recording logic
     
     // Notify all to stop talking indicators
     io.to(roomCode).emit('user-talking', {
@@ -1510,14 +1346,9 @@ io.on('connection', (socket) => {
         return;
     }
     
-    // 1. Record the data
-    const recData = currentRecordings.get(socket.id);
-    if (recData) {
-        recData.sampleRate = sampleRate; // Set sample rate on first chunk
-        recData.buffer.push(Buffer.from(audioBuffer));
-    }
+    // Removed: Record the data (step 1)
     
-    // 2. Stream the data to receiver
+    // Stream the data to receiver
     io.to(receiverId).emit('audio-data', {
         audioBuffer: audioBuffer,
         sampleRate: sampleRate,
@@ -1526,16 +1357,7 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Admin Request to fetch recordings
-  socket.on('admin:fetch-recordings', (data) => {
-      const { roomCode } = data;
-      const room = rooms.get(roomCode);
-      
-      if (room && socket.id === room.admin) {
-          const recs = recordings.get(roomCode) || [];
-          socket.emit('admin:recordings-list', { recordings: recs });
-      }
-  });
+  // Removed: Admin Request to fetch recordings handler
 
   // Toggle block user (Admin only)
   socket.on('toggle-block-user', (data) => {
@@ -1572,11 +1394,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     console.log('User disconnected:', socket.id, 'Reason:', reason);
     
-    // Clean up any incomplete recordings
-    if (currentRecordings.has(socket.id)) {
-        console.log(`Cleaning up incomplete recording for ${socket.id}`);
-        currentRecordings.delete(socket.id);
-    }
+    // Removed: Cleanup for incomplete recordings
     
     for (const [roomCode, room] of rooms.entries()) {
       if (room.admin === socket.id) {
@@ -1584,7 +1402,7 @@ io.on('connection', (socket) => {
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
-        recordings.delete(roomCode); // Also delete recordings for the room
+        // Removed: recordings cleanup
         break;
       } else if (room.users.has(socket.id)) {
         // Regular user disconnected
