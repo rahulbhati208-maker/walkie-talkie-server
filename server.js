@@ -1006,7 +1006,7 @@ function getCommonScript() {
                     item.querySelector('.play-rec-btn').addEventListener('click', (e) => {
                         const base64 = e.currentTarget.getAttribute('data-base64');
                         if (base64) {
-                            const audioUrl = \`data:audio/wav;base64,\${base64}\`;
+                            const audioUrl = `data:audio/wav;base64,${base64}`;
                             new Audio(audioUrl).play().catch(err => console.error("Playback error:", err));
                         }
                     });
@@ -1201,7 +1201,7 @@ app.get('/admin', (req, res) => {
             border-color: #3498db;
             background: #e3f2fd;
         }
-        /* --- ADDED GLOW CSS --- */
+        /* --- ADDED GLOW CSS for Admin Target --- */
         .user-circle.admin-target {
             border-color: #3498db; /* Blue glow for active targeting */
             box-shadow: 0 0 15px rgba(52, 152, 219, 0.7);
