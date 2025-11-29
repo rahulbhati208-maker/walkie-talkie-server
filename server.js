@@ -16,6 +16,10 @@ const io = socketIo(server, {
 // Store rooms and users globally
 const rooms = new Map();
 
+// NEW: In-memory storage for transmission logs (replaces external DB for recordings)
+// Structure: Map<roomCode, Array<LogEntry>>
+const transmissionLogs = new Map();
+
 /**
  * Generates a unique 4-digit room code.
  * @returns {string} The unique room code.
@@ -31,8 +35,6 @@ function generateRoomCode() {
 // --- CLIENT-SIDE JAVASCRIPT LOGIC (Served separately at /client.js) ---
 
 function getClientScriptContent() {
-    // This function returns the large client-side logic as a clean string.
-    // It is served via a separate Express route to prevent the 'SyntaxError: Unexpected token class'.
     return `
             class WalkieTalkieApp {
                 constructor(isAdmin) {
@@ -51,6 +53,11 @@ function getClientScriptContent() {
                     this.reconnectTimeout = null;
                     this.blockedUsers = new Set();
                     
+                    // New recording properties
+                    this.mediaRecorder = null;
+                    this.audioChunks = [];
+                    this.isCapturing = false;
+
                     this.init();
                 }
 
@@ -225,11 +232,15 @@ function getClientScriptContent() {
                         document.getElementById('createRoomBtn').addEventListener('click', () => this.createRoom());
                     } else {
                         document.getElementById('joinRoomBtn').addEventListener('click', () => this.joinRoom());
-                        // PTT events: touchstart/touchend for mobile, mousedown/mouseup for desktop
-                        document.getElementById('talkBtn').addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
-                        document.getElementById('talkBtn').addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
-                        document.getElementById('talkBtn').addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
-                        document.getElementById('talkBtn').addEventListener('mouseup', () => this.stopTalking());
+                        
+                        const talkBtn = document.getElementById('talkBtn');
+                        if (talkBtn) {
+                            // PTT events: touchstart/touchend for mobile, mousedown/mouseup for desktop
+                            talkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
+                            talkBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
+                            talkBtn.addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
+                            talkBtn.addEventListener('mouseup', () => this.stopTalking());
+                        }
                     }
                 }
 
@@ -237,17 +248,12 @@ function getClientScriptContent() {
                     try {
                         this.localStream = await navigator.mediaDevices.getUserMedia({ 
                             audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                channelCount: 1,
-                                sampleRate: 16000
+                                echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000
                             } 
                         });
                         
                         const micIndicator = document.getElementById('micIndicator');
                         if(micIndicator) micIndicator.classList.add('active');
-                        console.log('Microphone access granted');
                         
                         this.localStream.getTracks().forEach(track => track.stop());
                         this.localStream = null;
@@ -265,6 +271,8 @@ function getClientScriptContent() {
                         this.roomCode = data.roomCode;
                         document.getElementById('roomCode').textContent = data.roomCode;
                         this.showSuccess('Room created with code: ' + data.roomCode);
+                        // Admin joins room, fetch logs
+                        this.socket.emit('fetch-logs', { roomCode: this.roomCode });
                     });
 
                     this.socket.on('room-joined', (data) => {
@@ -276,12 +284,21 @@ function getClientScriptContent() {
                         document.getElementById('chatSection').classList.remove('hidden');
                         this.saveToLocalStorage();
                         this.showSuccess('Successfully joined room: ' + data.roomCode);
-                        this.currentTalkingTo = data.adminId; 
+                        this.currentTalkingTo = data.adminId;
+                        // User joins room, fetch logs 
+                        this.socket.emit('fetch-logs', { roomCode: this.roomCode });
                     });
 
                     this.socket.on('users-update', (users) => {
                         if (this.isAdmin) {
                             this.updateUsersList(users);
+                        }
+                    });
+                    
+                    // NEW: Update console when new logs arrive
+                    this.socket.on('logs-update', (data) => {
+                        if (this.roomCode === data.roomCode) {
+                            this.renderLogConsole(data.logs);
                         }
                     });
 
@@ -372,18 +389,15 @@ function getClientScriptContent() {
                         return;
                     }
                     
-                    if (!this.localStream) {
-                        // Re-request access if stream was closed previously
-                        try {
-                           this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                                audio: {
-                                    echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000
-                                } 
+                    try {
+                        if (!this.localStream) {
+                            this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000 } 
                             });
-                        } catch (e) {
-                            this.showError('Microphone access denied. Cannot start talk session.');
-                            return;
                         }
+                    } catch (e) {
+                        this.showError('Microphone access denied. Cannot start talk session.');
+                        return;
                     }
 
                     const finalTargetId = this.isAdmin ? targetUserId : this.currentTalkingTo;
@@ -407,11 +421,14 @@ function getClientScriptContent() {
                         this.updateAdminTalkButtons(finalTargetId);
                     }
                     
+                    // START AUDIO CAPTURE AND LIVE STREAM
                     await this.startAudioStreaming();
+                    this.startRecordingCapture(); // Start client-side recording for logging
 
                     this.socket.emit('start-talking', {
                         targetUserId: finalTargetId,
                         roomCode: this.roomCode,
+                        startTime: Date.now()
                     });
                 }
 
@@ -432,25 +449,86 @@ function getClientScriptContent() {
                         this.updateAdminTalkButtons(null);
                     }
 
+                    // STOP AUDIO CAPTURE AND LIVE STREAM
                     this.stopAudioStreaming();
+                    this.stopRecordingCapture(); // Stop client-side recording and log transmission
 
                     this.socket.emit('stop-talking', {
                         roomCode: this.roomCode,
+                        stopTime: Date.now()
                     });
                 }
+
+                // --- NEW RECORDING CAPTURE LOGIC (Client-side) ---
+                startRecordingCapture() {
+                    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') return;
+                    
+                    this.audioChunks = [];
+                    // We must use the audio stream from MediaRecorder, not the scriptProcessor stream
+                    this.mediaRecorder = new MediaRecorder(this.localStream, { mimeType: 'audio/webm' });
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        this.audioChunks.push(event.data);
+                    };
+
+                    this.mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                        this.logTransmission(audioBlob); // Process and send to server log
+                    };
+
+                    this.mediaRecorder.start();
+                    this.isCapturing = true;
+                }
+
+                stopRecordingCapture() {
+                    if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                        this.mediaRecorder.stop();
+                        this.isCapturing = false;
+                    }
+                }
+
+                blobToBase64(blob) {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            // Extract Base64 part: 'data:audio/webm;base64,...'
+                            resolve(reader.result.split(',')[1]);
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
+                }
+
+                async logTransmission(audioBlob) {
+                    const finalTargetName = this.getDisplayName(this.currentTalkingTo);
+                    const base64Audio = await this.blobToBase64(audioBlob);
+
+                    const logEntry = {
+                        roomCode: this.roomCode,
+                        senderName: this.userName,
+                        receiverName: finalTargetName,
+                        timestamp: Date.now(),
+                        audioBase64: base64Audio, // Stored for playback
+                        mimeType: audioBlob.type
+                    };
+
+                    this.socket.emit('log-transmission', logEntry);
+                }
+                
+                getDisplayName(userId) {
+                    if (this.isAdmin) {
+                        const user = this.users.find(u => u.id === userId);
+                        return user ? user.name : 'Unknown User';
+                    } else {
+                        return 'Admin'; // User always talks to Admin
+                    }
+                }
+                // --- END NEW RECORDING CAPTURE LOGIC ---
+
 
                 // --- AUDIO STREAMING (Sender) ---
                 async startAudioStreaming() {
                     try {
-                        if (!this.localStream) {
-                            // This should have been handled in startTalking, but re-init for safety
-                            this.localStream = await navigator.mediaDevices.getUserMedia({ 
-                                audio: {
-                                    echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000
-                                } 
-                            });
-                        }
-
                         if (!this.audioContext) {
                             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                             if (this.audioContext.state === 'suspended') {
@@ -499,7 +577,9 @@ function getClientScriptContent() {
                         this.mediaStreamSource.disconnect();
                         this.mediaStreamSource = null;
                     }
-                    // Crucially, we do NOT stop the tracks on the localStream here, allowing quick re-use.
+                    if (this.localStream) {
+                        // Crucially, we do NOT stop the tracks on the localStream here, allowing quick re-use.
+                    }
                 }
                 
                 // --- AUDIO PLAYBACK (Receiver) ---
@@ -531,6 +611,57 @@ function getClientScriptContent() {
                         console.error('Error playing audio:', error);
                     }
                 }
+                
+                // --- NEW CONSOLE RENDERING LOGIC ---
+                renderLogConsole(logs) {
+                    const consoleEl = document.getElementById('transmissionConsole');
+                    if (!consoleEl) return;
+
+                    consoleEl.innerHTML = ''; // Clear existing logs
+
+                    if (logs.length === 0) {
+                        consoleEl.innerHTML = '<p class="text-center text-gray-500 italic text-sm py-4">No transmissions recorded yet.</p>';
+                        return;
+                    }
+
+                    logs.sort((a, b) => b.timestamp - a.timestamp); // Newest first
+
+                    logs.forEach(log => {
+                        const isSender = log.senderName === this.userName;
+                        const time = new Date(log.timestamp).toLocaleTimeString();
+                        const targetName = isSender ? log.receiverName : log.senderName;
+
+                        const item = document.createElement('div');
+                        item.className = \`log-item p-3 mb-2 rounded-lg \${isSender ? 'bg-indigo-500 text-white shadow-md' : 'bg-white border border-gray-200'}\`;
+                        
+                        item.innerHTML = \`
+                            <div class="flex justify-between items-center">
+                                <p class="text-sm font-semibold">
+                                    \${isSender ? 'TO' : 'FROM'}: \${targetName}
+                                </p>
+                                <button class="play-log-btn \${isSender ? 'bg-indigo-400 hover:bg-indigo-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-800' } p-1 rounded-full text-xs transition-colors duration-150"
+                                        data-base64="\${log.audioBase64}"
+                                        data-mimetype="\${log.mimeType}">
+                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="text-xs \${isSender ? 'text-indigo-200' : 'text-gray-500'} mt-1">\${time}</p>
+                        \`;
+                        
+                        consoleEl.appendChild(item);
+
+                        item.querySelector('.play-log-btn').addEventListener('click', (e) => {
+                            const btn = e.currentTarget;
+                            const base64 = btn.getAttribute('data-base64');
+                            const mimeType = btn.getAttribute('data-mimetype');
+                            const audioUrl = \`data:\${mimeType};base64,\${base64}\`;
+                            new Audio(audioUrl).play().catch(err => console.error("Playback error:", err));
+                        });
+                    });
+                }
+                // --- END NEW CONSOLE RENDERING LOGIC ---
 
                 addUserToUI(userId, userName) {
                     if (!this.isAdmin) return;
@@ -625,9 +756,10 @@ function getClientScriptContent() {
                 updateUsersList(users) {
                     if (!this.isAdmin) return;
                     
+                    // Simple re-render for clean list state
                     const usersList = document.getElementById('usersList');
-                    // Simple removal and re-render for clean list state
                     usersList.innerHTML = '';
+                    this.users = users; // Store users list globally for display name lookup
                     
                     users.forEach(user => {
                         this.addUserToUI(user.id, user.name);
@@ -693,6 +825,7 @@ function getClientScriptContent() {
                 
                 leaveRoom() {
                     this.stopAudioStreaming();
+                    this.stopRecordingCapture();
                     
                     if (this.localStream) {
                         this.localStream.getTracks().forEach(track => track.stop());
@@ -807,7 +940,7 @@ function getCommonStyles() {
                 50% { opacity: 0.5; } 
                 100% { opacity: 1; } 
             }
-            .join-section, .chat-section { padding: 24px; }
+            .join-section, .chat-section, .log-section { padding: 24px; }
             .input-group { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
             input { 
                 padding: 12px; 
@@ -917,6 +1050,77 @@ function getCommonStyles() {
                 background: #e74c3c; 
             }
             .mic-dot.active { background: #27ae60; }
+
+            /* Admin Styles */
+            .users-container { padding: 20px; border-top: 1px solid #ecf0f1; }
+            .users-grid { 
+                display: grid; 
+                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
+                gap: 20px; 
+                margin-top: 12px; 
+            }
+            .user-circle { 
+                background: #f8f9fa; 
+                border: 2px solid #e9ecef; 
+                border-radius: 12px; 
+                padding: 12px; 
+                text-align: center; 
+                position: relative;
+                transition: all 0.3s ease; 
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            }
+            .user-circle.admin-target {
+                border-color: #3498db; 
+                box-shadow: 0 0 15px rgba(52, 152, 219, 0.7);
+            }
+            .user-circle.talking { 
+                border-color: #27ae60; 
+                background: #d5f4e6; 
+                box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
+            }
+            .user-circle.receiving { 
+                border-color: #e74c3c; 
+                background: #fadbd8; 
+                animation: glow-red 1s infinite; 
+                box-shadow: 0 0 15px rgba(231, 76, 60, 0.7);
+            }
+            @keyframes glow-red { 
+                0% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
+                50% { box-shadow: 0 0 15px rgba(231, 76, 60, 0.7); } 
+                100% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
+            }
+            .user-avatar { 
+                font-size: 24px; 
+                font-weight: bold; 
+                color: #2c3e50;
+                width: 50px;
+                height: 50px;
+                border-radius: 50%;
+                background: #ecf0f1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 8px;
+            }
+            .log-section h2 { 
+                font-size: 18px; 
+                font-weight: 600; 
+                color: #2c3e50; 
+                margin-bottom: 12px; 
+                border-bottom: 2px solid #ddd;
+                padding-bottom: 6px;
+            }
+            .log-console {
+                max-height: 250px;
+                overflow-y: auto;
+                background: #f9f9f9;
+                border-radius: 8px;
+                padding: 10px;
+                border: 1px solid #eee;
+            }
         </style>
     `;
 }
@@ -932,6 +1136,7 @@ app.get('/', (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User - Walkie Talkie</title>
     ${getCommonStyles()}
+    <style> .container { max-width: 600px; } </style>
 </head>
 <body>
     <div class="container">
@@ -950,6 +1155,7 @@ app.get('/', (req, res) => {
                 <button id="joinRoomBtn">Join Room</button>
             </div>
         </div>
+        
         <div class="chat-section hidden" id="chatSection">
             <div class="user-info">
                 <div>Connected as: <strong id="currentUserName"></strong></div>
@@ -974,6 +1180,16 @@ app.get('/', (req, res) => {
                 </div>
             </div>
         </div>
+        
+        <!-- NEW CONSOLE SECTION -->
+        <div class="log-section" id="logSection">
+            <h2>Transmission Log (TO / FROM Admin)</h2>
+            <div class="log-console" id="transmissionConsole">
+                <p class="text-center text-gray-500 italic text-sm py-4">Waiting to connect to room...</p>
+            </div>
+        </div>
+        <!-- END NEW CONSOLE SECTION -->
+
         <div class="error-message hidden" id="errorMessage"></div>
         <div class="success-message hidden" id="successMessage"></div>
     </div>
@@ -981,7 +1197,6 @@ app.get('/', (req, res) => {
     <script src="/socket.io/socket.io.js"></script>
     <script src="/client.js"></script>
     <script>
-        // Start the User application
         window.onload = () => {
              const app = new WalkieTalkieApp(false);
         };
@@ -1001,136 +1216,7 @@ app.get('/admin', (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin - Walkie Talkie</title>
     ${getCommonStyles()}
-    <style>
-        .container { 
-            max-width: 800px; 
-            margin: 0 auto; 
-            border-radius: 12px; 
-        }
-        .header { 
-            background: #2c3e50; 
-            color: white; 
-            padding: 20px; 
-            text-align: center; 
-        }
-        .room-info { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-top: 12px; 
-            flex-wrap: wrap; 
-            gap: 12px;
-        }
-        #roomCode { 
-            font-size: 24px; 
-            font-weight: bold; 
-            color: #f39c12; 
-            background: rgba(255,255,255,0.1); 
-            padding: 8px 16px; 
-            border-radius: 6px; 
-        }
-        .users-container { 
-            padding: 20px; 
-            border-top: 1px solid #ecf0f1;
-        }
-        .users-grid { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
-            gap: 20px; 
-            margin-top: 12px; 
-        }
-        .user-circle { 
-            background: #f8f9fa; 
-            border: 2px solid #e9ecef; 
-            border-radius: 12px; 
-            padding: 12px; 
-            text-align: center; 
-            position: relative;
-            transition: all 0.3s ease; 
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-        .user-circle:hover {
-            border-color: #3498db;
-            background: #e3f2fd;
-        }
-        /* ADMIN TARGET GLOW CSS */
-        .user-circle.admin-target {
-            border-color: #3498db; 
-            box-shadow: 0 0 15px rgba(52, 152, 219, 0.7);
-        }
-        /* User is talking to admin */
-        .user-circle.talking { 
-            border-color: #27ae60; 
-            background: #d5f4e6; 
-            box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
-        }
-        /* User is the one receiving (red glow/border) */
-        .user-circle.receiving { 
-            border-color: #e74c3c; 
-            background: #fadbd8; 
-            animation: glow-red 1s infinite; 
-            box-shadow: 0 0 15px rgba(231, 76, 60, 0.7);
-        }
-        @keyframes glow-red { 
-            0% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
-            50% { box-shadow: 0 0 15px rgba(231, 76, 60, 0.7); } 
-            100% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); } 
-        }
-        .user-avatar { 
-            font-size: 24px; 
-            font-weight: bold; 
-            color: #2c3e50;
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: #ecf0f1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 8px;
-        }
-        .user-name { 
-            font-weight: 600; 
-            font-size: 14px;
-            color: #2c3e50;
-            margin-bottom: 8px;
-        }
-        .user-controls {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            width: 100%;
-        }
-        .talk-btn-mini { 
-            padding: 8px 12px; 
-            font-size: 12px; 
-            border-radius: 4px;
-            background: #3498db;
-            color: white;
-        }
-        .talk-btn-mini.talking {
-            background: #e74c3c;
-        }
-        .talk-btn-mini.blocked {
-            background: #95a5a6;
-        }
-        .block-btn { 
-            padding: 8px 12px; 
-            font-size: 12px; 
-            border-radius: 4px;
-            background: #e74c3c;
-            color: white;
-        }
-        .block-btn:hover {
-            background: #c0392b;
-        }
-        .block-btn.blocked {
-            background: #2ecc71;
-        }
-    </style>
+    <style> .container { max-width: 800px; } </style>
 </head>
 <body>
     <div class="container">
@@ -1157,6 +1243,15 @@ app.get('/admin', (req, res) => {
             </div>
         </div>
         
+        <!-- NEW CONSOLE SECTION -->
+        <div class="log-section">
+            <h2>Transmission Log (FROM / TO Users)</h2>
+            <div class="log-console" id="transmissionConsole">
+                <p class="text-center text-gray-500 italic text-sm py-4">Connect to a room to view transmission history...</p>
+            </div>
+        </div>
+        <!-- END NEW CONSOLE SECTION -->
+
         <div class="error-message hidden" id="errorMessage"></div>
         <div class="success-message hidden" id="successMessage"></div>
     </div>
@@ -1164,7 +1259,6 @@ app.get('/admin', (req, res) => {
     <script src="/socket.io/socket.io.js"></script>
     <script src="/client.js"></script>
     <script>
-        // Start the Admin application
         window.onload = () => {
              const app = new WalkieTalkieApp(true);
         };
@@ -1185,7 +1279,6 @@ io.on('connection', (socket) => {
     if (existingRoom) {
          socket.leave(existingRoom.code);
          rooms.delete(existingRoom.code);
-         console.log('Admin closed previous room:', existingRoom.code);
     }
     
     const room = {
@@ -1240,6 +1333,30 @@ io.on('connection', (socket) => {
     const users = Array.from(room.users.values());
     io.to(room.admin).emit('users-update', users);
   });
+
+  // NEW: Handle client-side log transmission
+  socket.on('log-transmission', (logEntry) => {
+      if (!transmissionLogs.has(logEntry.roomCode)) {
+          transmissionLogs.set(logEntry.roomCode, []);
+      }
+      transmissionLogs.get(logEntry.roomCode).push(logEntry);
+      
+      // Notify all users in the room to update their consoles
+      io.to(logEntry.roomCode).emit('logs-update', {
+          roomCode: logEntry.roomCode,
+          logs: transmissionLogs.get(logEntry.roomCode)
+      });
+  });
+  
+  // NEW: Handle log request from client (on join/reconnect)
+  socket.on('fetch-logs', (data) => {
+      const logs = transmissionLogs.get(data.roomCode) || [];
+      socket.emit('logs-update', {
+          roomCode: data.roomCode,
+          logs: logs
+      });
+  });
+  
 
   // Start talking
   socket.on('start-talking', (data) => {
@@ -1353,6 +1470,7 @@ io.on('connection', (socket) => {
         console.log('Admin disconnected, closing room:', roomCode);
         io.to(roomCode).emit('room-closed', { message: 'Room closed by admin' });
         rooms.delete(roomCode);
+        transmissionLogs.delete(roomCode); // Clean up logs
         break;
       } else if (room.users.has(socket.id)) {
         // Regular user disconnected
