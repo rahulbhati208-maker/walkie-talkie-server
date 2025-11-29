@@ -237,7 +237,7 @@ function getClientScriptContent() {
                             talkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.startTalking(this.currentTalkingTo) }, { passive: false });
                             talkBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.stopTalking() }, { passive: false });
                             talkBtn.addEventListener('mousedown', () => this.startTalking(this.currentTalkingTo));
-                            talkBtn.addEventListener('mouseup', () => this.stopTalking());
+                            document.addEventListener('mouseup', () => this.stopTalking()); // Use document for robust release
                         }
                     }
                 }
@@ -302,14 +302,13 @@ function getClientScriptContent() {
                     });
 
                     this.socket.on('audio-data', (data) => {
-                        // FIX: Playback for both sender and receiver
-                        // If the receiving socket is the sender (socket.id === data.senderId), play the echo.
-                        // If the receiving socket is the target (socket.id === data.targetUserId), play the audio.
-                        if (this.socket.id === data.senderId || this.socket.id === data.targetUserId) {
-                             // Only play if we are not currently pressing PTT (isTalking is for the local user)
-                            if (!this.isTalking) {
-                                this.playAudio(data.audioBuffer, data.sampleRate);
-                            }
+                        // CRITICAL FIX: The receiver must always play, regardless of their PTT state.
+                        if (this.socket.id === data.targetUserId) {
+                             this.playAudio(data.audioBuffer, data.sampleRate);
+                        }
+                         // The sender receiving their echo. Playback for confirmation.
+                        else if (this.socket.id === data.senderId) {
+                            this.playAudio(data.audioBuffer, data.sampleRate);
                         }
                     });
                     
@@ -385,6 +384,7 @@ function getClientScriptContent() {
                         this.showError('Not connected to room');
                         return;
                     }
+                    if (this.isTalking) return; // Prevent double trigger
                     
                     try {
                         if (!this.localStream) {
@@ -513,11 +513,9 @@ function getClientScriptContent() {
                 
                 getDisplayName(userId) {
                     if (this.isAdmin) {
-                        // Admin looks up user by ID
                         const user = Array.from(this.users || []).find(u => u.id === userId);
-                        return user ? user.name : 'Unknown User';
+                        return user ? user.name : 'Admin';
                     } else if (userId === this.currentTalkingTo) {
-                        // User is sending to Admin
                         return 'Admin'; 
                     } else {
                         return 'Unknown';
@@ -531,9 +529,10 @@ function getClientScriptContent() {
                     try {
                         if (!this.audioContext) {
                             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                            if (this.audioContext.state === 'suspended') {
-                                this.audioContext.resume();
-                            }
+                        }
+                        // CRITICAL FIX: Ensure audio context is not suspended by browser
+                        if (this.audioContext.state === 'suspended') {
+                            await this.audioContext.resume();
                         }
 
                         this.mediaStreamSource = this.audioContext.createMediaStreamSource(this.localStream);
@@ -554,7 +553,7 @@ function getClientScriptContent() {
                                     audioBuffer: int16Data.buffer,
                                     sampleRate: this.audioContext.sampleRate,
                                     targetUserId: this.currentTalkingTo,
-                                    senderId: this.socket.id // Include sender ID for self-playback logic on receiver side
+                                    senderId: this.socket.id // Include sender ID for self-playback logic on server side
                                 });
                             }
                         };
@@ -585,9 +584,10 @@ function getClientScriptContent() {
                     try {
                         if (!this.audioContext) {
                             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                            if (this.audioContext.state === 'suspended') {
-                                this.audioContext.resume();
-                            }
+                        }
+                        // CRITICAL FIX: Ensure audio context is resumed before creating buffer source
+                        if (this.audioContext.state === 'suspended') {
+                            this.audioContext.resume().catch(err => console.error("Failed to resume audio context:", err));
                         }
 
                         const int16Data = new Int16Array(audioBuffer);
@@ -659,7 +659,7 @@ function getClientScriptContent() {
                             new Audio(audioUrl).play().catch(err => console.error("Playback error:", err));
                         });
                     });
-                    consoleEl.scrollTop = consoleEl.scrollHeight; // Scroll to bottom on update
+                    consoleEl.scrollTop = consoleEl.scrollHeight; 
                 }
                 // --- END CONSOLE RENDERING LOGIC ---
 
@@ -854,7 +854,6 @@ function getClientScriptContent() {
                     localStorage.removeItem('walkieRoomCode');
                     localStorage.removeItem('walkieUserName');
                     
-                    // Clear console display
                     const consoleEl = document.getElementById('transmissionConsole');
                     if (consoleEl) consoleEl.innerHTML = '<p class="text-center text-gray-500 italic text-sm py-4">Waiting to connect to room...</p>';
                 }
@@ -1431,7 +1430,7 @@ io.on('connection', (socket) => {
             audioBuffer: audioBuffer,
             sampleRate: sampleRate,
             senderId: senderId,
-            targetUserId: receiverId // Still useful for user UI logic
+            targetUserId: receiverId 
         });
     });
   });
