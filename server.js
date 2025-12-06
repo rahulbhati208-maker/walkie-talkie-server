@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const axios = require('axios');
+const querystring = require('querystring');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,7 +13,10 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
+// Parse both JSON and Form Data (Crucial for intercepting forms)
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 const pendingInterceptions = {};
 
 // --- FRONTEND UI (Mobile Fixed Layout) ---
@@ -32,13 +36,11 @@ const FRONTEND_UI = `
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         
-        /* FIXED LAYOUT ENGINE */
         body { 
             margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); 
             display: flex; flex-direction: column; height: 100vh; overflow: hidden; 
         }
 
-        /* The Middle Area (Scrolls independently) */
         .viewport { 
             flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; 
         }
@@ -46,7 +48,6 @@ const FRONTEND_UI = `
         .view { display: none; height: 100%; flex-direction: column; width: 100%; }
         .view.active { display: flex; }
 
-        /* Bottom Navigation (Fixed) */
         .bottom-nav { 
             height: var(--tab-height); background: #1a1a1a; border-top: 1px solid var(--border); 
             display: flex; justify-content: space-around; align-items: center; 
@@ -60,18 +61,18 @@ const FRONTEND_UI = `
         .nav-item.active { color: var(--accent); }
         .nav-icon { font-size: 20px; }
         .badge-dot { 
-            position: absolute; top: 10px; right: 35%; width: 8px; height: 8px; 
-            background: var(--danger); border-radius: 50%; border: 1px solid #1a1a1a; display: none; 
+            position: absolute; top: 10px; right: 35%; width: 10px; height: 10px; 
+            background: var(--danger); border-radius: 50%; border: 2px solid #1a1a1a; display: none; 
         }
         .badge-dot.visible { display: block; }
 
-        /* Browser Tab Styles */
+        /* Browser Tab */
         .url-bar { padding: 8px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
         .url-input { flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; padding: 8px; border-radius: 6px; outline: none; }
         .btn-go { background: var(--success); color: white; border: none; padding: 0 15px; border-radius: 6px; font-weight: bold; }
         iframe { flex: 1; border: none; background: white; }
 
-        /* Interceptor Styles */
+        /* Interceptor */
         .interceptor-view { padding: 15px; overflow-y: auto; flex: 1; }
         .req-card { 
             background: var(--card); border-radius: 8px; padding: 15px; 
@@ -89,7 +90,7 @@ const FRONTEND_UI = `
         .btn-drop { background: var(--danger); }
         .btn-rep { background: #ff9800; color: black; }
         
-        /* Repeater Styles */
+        /* Repeater */
         .repeater-view { padding: 15px; display: flex; flex-direction: column; gap: 10px; height: 100%; overflow-y: auto; }
     </style>
 </head>
@@ -102,7 +103,6 @@ const FRONTEND_UI = `
                 <input type="text" id="browser-url" class="url-input" value="https://jsonplaceholder.typicode.com/posts/1">
                 <button class="btn-go" onclick="navigate()">GO</button>
             </div>
-            <!-- The iframe now fills the remaining space exactly -->
             <iframe id="web-frame" src="about:blank"></iframe>
         </div>
 
@@ -111,7 +111,7 @@ const FRONTEND_UI = `
             <div class="interceptor-view">
                 <div id="intercept-empty" style="text-align:center; margin-top: 50%; color: #666;">
                     <h3>Ready to Intercept</h3>
-                    <p>Click a link or button in the Browser tab.</p>
+                    <p>Interact with the browser to capture traffic.</p>
                 </div>
 
                 <div id="intercept-active" class="req-card" style="display:none;">
@@ -129,7 +129,7 @@ const FRONTEND_UI = `
                         <input type="number" id="int-status" class="code-input" placeholder="Status">
                     </div>
 
-                    <textarea id="int-body" class="code-input"></textarea>
+                    <textarea id="int-body" class="code-input" placeholder="Body data..."></textarea>
 
                     <div class="action-row">
                         <button class="btn btn-drop" onclick="dropRequest()">Drop</button>
@@ -154,7 +154,6 @@ const FRONTEND_UI = `
         </div>
     </div>
 
-    <!-- FIXED BOTTOM NAV -->
     <div class="bottom-nav">
         <button class="nav-item active" onclick="switchTab('browser')">
             <span class="nav-icon">🌐</span><span>Browser</span>
@@ -173,7 +172,6 @@ const FRONTEND_UI = `
         let currentPhase = null; 
         let currentId = null;
 
-        // --- SOCKETS ---
         socket.on('intercept_request', (data) => handleTraffic('request', data));
         socket.on('intercept_response', (data) => handleTraffic('response', data));
 
@@ -182,11 +180,16 @@ const FRONTEND_UI = `
             currentPhase = type;
             currentId = data.id;
 
-            // Update UI
             document.getElementById('intercept-empty').style.display = 'none';
             document.getElementById('intercept-active').style.display = 'flex';
             document.getElementById('int-id').innerText = data.id;
-            document.getElementById('int-body').value = data.body || '';
+            
+            // Format body if it's JSON-like or Object
+            let displayBody = data.body;
+            if (typeof displayBody === 'object') {
+                displayBody = new URLSearchParams(displayBody).toString();
+            }
+            document.getElementById('int-body').value = displayBody || '';
 
             if (type === 'request') {
                 document.getElementById('int-badge').innerText = 'OUTGOING REQUEST';
@@ -206,7 +209,6 @@ const FRONTEND_UI = `
             }
         }
 
-        // --- ACTIONS ---
         function forwardRequest() {
             if (!currentId) return;
             const body = document.getElementById('int-body').value;
@@ -265,7 +267,6 @@ const FRONTEND_UI = `
             btn.innerText = "Send Request"; btn.disabled = false;
         }
 
-        // --- NAV ---
         function navigate() {
             const url = document.getElementById('browser-url').value;
             document.getElementById('web-frame').src = '/proxy?url=' + encodeURIComponent(url);
@@ -300,65 +301,102 @@ app.post('/api/repeat', async (req, res) => {
     } catch (err) { res.status(500).json({ status: 500, body: err.message }); }
 });
 
-// Proxy Engine
-app.get('/proxy', async (req, res) => {
+// MAIN PROXY ENGINE (Supports GET and POST)
+app.all('/proxy', async (req, res) => {
     const targetUrl = req.query.url;
     if (!targetUrl) return res.send("No URL provided");
     const reqId = Date.now().toString();
 
+    // Determine payload based on method
+    const incomingMethod = req.method;
+    const incomingBody = (incomingMethod === 'POST') ? req.body : '';
+
     try {
-        // 1. Intercept Request
-        io.emit('intercept_request', { id: reqId, url: targetUrl, method: 'GET', body: '' });
+        // --- PHASE 1: INTERCEPT REQUEST ---
+        // Emit the body to the UI (if it's an object, UI handles formatting)
+        io.emit('intercept_request', { 
+            id: reqId, 
+            url: targetUrl, 
+            method: incomingMethod, 
+            body: incomingBody 
+        });
+        
         const modReq = await waitForSignal(reqId, 'request');
 
-        // 2. Real Request
+        // --- PHASE 2: REAL REQUEST ---
         const response = await axios({
-            url: modReq.url, method: modReq.method, data: modReq.body,
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            validateStatus: () => true, responseType: 'arraybuffer'
+            url: modReq.url,
+            method: modReq.method,
+            data: modReq.body, // Send the modified body
+            headers: { 
+                'User-Agent': 'Mozilla/5.0',
+                'Content-Type': 'application/x-www-form-urlencoded' // Default for forms
+            },
+            validateStatus: () => true, 
+            responseType: 'arraybuffer'
         });
 
-        // 3. Intercept Response
+        // --- PHASE 3: INTERCEPT RESPONSE ---
         let bodyStr = response.data.toString('utf-8');
         io.emit('intercept_response', { id: reqId, status: response.status, body: bodyStr });
         const modRes = await waitForSignal(reqId, 'response');
 
-        // 4. Inject "Link Click" Script (THE FIX)
+        // --- PHASE 4: SEND TO BROWSER WITH INJECTION ---
         let finalBody = modRes.body;
         
-        // Remove CSP so our script runs
         res.removeHeader("Content-Security-Policy");
         res.removeHeader("X-Frame-Options");
 
-        // Inject Base Tag + The Interceptor Script
+        // The Magic Script: Intercepts Clicks AND Form Submits
         const scriptInjection = `
             <base href="${modReq.url}">
             <script>
-                // INTERCEPT ALL CLICKS
+                // 1. Intercept Links (GET)
                 document.addEventListener('click', function(e) {
                     const anchor = e.target.closest('a');
-                    if (anchor && anchor.href) {
+                    if (anchor && anchor.href && !anchor.href.startsWith('javascript:')) {
                         e.preventDefault();
-                        // Send traffic back through OUR proxy
-                        // We use window.top.location to reload the iframe logic if needed, 
-                        // but here we just navigate the window to the proxy endpoint
-                        const originalUrl = anchor.href;
-                        window.location.href = '/proxy?url=' + encodeURIComponent(originalUrl);
+                        window.location.href = '/proxy?url=' + encodeURIComponent(anchor.href);
                     }
                 });
                 
-                // INTERCEPT FORM SUBMITS
+                // 2. Intercept Forms (GET and POST)
                 document.addEventListener('submit', function(e) {
                     e.preventDefault();
                     const form = e.target;
-                    const url = form.action;
-                    // Simple GET forms support for now
-                    window.location.href = '/proxy?url=' + encodeURIComponent(url);
+                    const action = form.action || window.location.href;
+                    const method = (form.method || 'GET').toUpperCase();
+                    
+                    if (method === 'POST') {
+                        // Create a hidden form that posts to OUR server
+                        const tempForm = document.createElement('form');
+                        tempForm.method = 'POST';
+                        tempForm.action = '/proxy?url=' + encodeURIComponent(action);
+                        tempForm.style.display = 'none';
+                        
+                        // Copy inputs
+                        const formData = new FormData(form);
+                        for (const [key, value] of formData.entries()) {
+                            const input = document.createElement('input');
+                            input.name = key;
+                            input.value = value;
+                            tempForm.appendChild(input);
+                        }
+                        
+                        document.body.appendChild(tempForm);
+                        tempForm.submit();
+                    } else {
+                        // Handle GET forms (append params to URL)
+                        const formData = new FormData(form);
+                        const params = new URLSearchParams(formData);
+                        const separator = action.includes('?') ? '&' : '?';
+                        const fullUrl = action + separator + params.toString();
+                        window.location.href = '/proxy?url=' + encodeURIComponent(fullUrl);
+                    }
                 });
             </script>
         `;
 
-        // Inject at the top of HEAD or BODY
         if (finalBody.includes('<head>')) {
             finalBody = finalBody.replace('<head>', '<head>' + scriptInjection);
         } else {
