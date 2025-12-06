@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const axios = require('axios');
-const querystring = require('querystring'); // Helper for form data
+const querystring = require('querystring');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,7 +12,6 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// Parse standard form data and JSON
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -27,59 +26,99 @@ const FRONTEND_UI = `
     <title>Interceptor</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root { --bg: #121212; --card: #1e1e1e; --border: #333; --accent: #2196f3; --danger: #f44336; --success: #4caf50; --text: #e0e0e0; --tab-height: 50px; }
+        :root { 
+            --bg: #121212; --card: #1e1e1e; --border: #333; 
+            --accent: #2196f3; --danger: #f44336; --success: #4caf50; 
+            --text: #e0e0e0; --nav-height: 45px; 
+        }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         
-        body { margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        body { 
+            margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: var(--bg); color: var(--text); 
+            display: flex; flex-direction: column; height: 100dvh; overflow: hidden; 
+        }
 
-        /* TOP NAVIGATION */
+        /* COMPACT TOP NAV */
         .top-nav { 
-            height: var(--tab-height); background: #1a1a1a; border-bottom: 1px solid var(--border); 
+            height: var(--nav-height); background: #1a1a1a; border-bottom: 1px solid var(--border); 
             display: flex; justify-content: space-around; align-items: center; 
-            padding-top: env(safe-area-inset-top); flex-shrink: 0; z-index: 999;
+            flex-shrink: 0; z-index: 999;
         }
         .nav-item { 
             flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; 
-            color: #666; font-size: 14px; font-weight: bold; background: none; border: none; 
-            border-bottom: 3px solid transparent; position: relative; cursor: pointer;
+            color: #888; font-size: 13px; font-weight: 600; background: none; border: none; 
+            border-bottom: 2px solid transparent; position: relative; cursor: pointer;
         }
         .nav-item.active { color: var(--accent); border-bottom-color: var(--accent); }
         .badge-dot { 
-            position: absolute; top: 12px; right: 10px; width: 8px; height: 8px; 
+            position: absolute; top: 10px; right: 20%; width: 8px; height: 8px; 
             background: var(--danger); border-radius: 50%; display: none; 
         }
         .badge-dot.visible { display: block; }
 
-        /* MAIN CONTENT */
+        /* VIEWPORT */
         .viewport { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; }
         .view { display: none; height: 100%; flex-direction: column; width: 100%; }
         .view.active { display: flex; }
 
         /* BROWSER TAB */
-        .url-bar { padding: 10px; background: var(--card); display: flex; gap: 8px; border-bottom: 1px solid var(--border); }
-        .url-input { flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; outline: none; }
-        .btn-go { background: var(--success); color: white; border: none; padding: 0 15px; border-radius: 4px; font-weight: bold; }
+        .url-bar { 
+            padding: 8px; background: var(--card); display: flex; gap: 8px; 
+            border-bottom: 1px solid var(--border); flex-shrink: 0; 
+        }
+        .url-input { 
+            flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; 
+            padding: 6px 10px; border-radius: 4px; outline: none; font-size: 13px; 
+        }
+        .btn-go { 
+            background: var(--success); color: white; border: none; padding: 0 12px; 
+            border-radius: 4px; font-weight: bold; font-size: 12px; 
+        }
         iframe { flex: 1; border: none; background: white; }
 
-        /* INTERCEPTOR TAB */
-        .interceptor-view { padding: 20px; overflow-y: auto; flex: 1; }
-        .req-card { background: var(--card); border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--border); min-height: 100%; }
-        .code-input { background: #000; border: 1px solid #333; color: #0f0; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 13px; width: 100%; }
-        textarea.code-input { flex: 1; resize: none; min-height: 200px; }
-        .action-row { display: flex; gap: 10px; margin-top: auto; }
-        .btn { flex: 1; padding: 15px; border: none; border-radius: 4px; font-weight: bold; color: white; font-size: 14px; }
+        /* INTERCEPTOR TAB (FIXED LAYOUT) */
+        .interceptor-view { 
+            padding: 10px; flex: 1; display: flex; flex-direction: column; overflow: hidden; 
+        }
+        
+        /* The card now takes full height and manages its own overflow */
+        .req-card { 
+            background: var(--card); border-radius: 8px; padding: 10px; 
+            display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); 
+            height: 100%; overflow: hidden;
+        }
+
+        .card-header { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+        .badge { font-weight: bold; font-size: 13px; }
+
+        .meta-row { display: flex; gap: 5px; flex-shrink: 0; }
+
+        .code-input { 
+            background: #000; border: 1px solid #333; color: #0f0; padding: 8px; 
+            border-radius: 4px; font-family: monospace; font-size: 12px; 
+        }
+        
+        /* Textarea grows to fill space, but scrolls internally */
+        textarea.code-input { 
+            flex: 1; min-height: 0; resize: none; overflow-y: auto; 
+        }
+
+        .action-row { display: flex; gap: 8px; margin-top: auto; flex-shrink: 0; padding-top: 5px; }
+        .btn { 
+            flex: 1; padding: 12px; border: none; border-radius: 4px; 
+            font-weight: bold; color: white; font-size: 13px; 
+        }
         .btn-fwd { background: var(--success); }
         .btn-drop { background: var(--danger); }
         .btn-rep { background: #ff9800; color: black; }
 
         /* REPEATER TAB */
-        .repeater-view { padding: 20px; display: flex; flex-direction: column; gap: 10px; height: 100%; overflow-y: auto; }
-        #rep-response { white-space: pre-wrap; }
+        .repeater-view { padding: 10px; display: flex; flex-direction: column; gap: 8px; height: 100%; overflow: hidden; }
     </style>
 </head>
 <body>
 
-    <!-- TOP NAVIGATION -->
     <div class="top-nav">
         <button class="nav-item active" onclick="switchTab('browser')">Browser</button>
         <button class="nav-item" onclick="switchTab('intercept')">
@@ -103,25 +142,26 @@ const FRONTEND_UI = `
         <div id="view-intercept" class="view">
             <div class="interceptor-view">
                 <div id="intercept-empty" style="text-align:center; margin-top: 50%; color: #666;">
-                    <h3>Waiting for Traffic...</h3>
-                    <p>Click a link or submit a form in the Browser.</p>
+                    <h3>Ready</h3>
+                    <p>Traffic will appear here.</p>
                 </div>
 
                 <div id="intercept-active" class="req-card" style="display:none;">
-                    <div style="display:flex; justify-content:space-between; color:#888; font-size:12px;">
-                        <span id="int-badge" style="font-weight:bold; font-size:14px;">REQUEST</span>
-                        <span>ID: <span id="int-id">0</span></span>
+                    <div class="card-header">
+                        <span id="int-badge" class="badge">REQUEST</span>
+                        <span style="font-size:11px; color:#666">ID: <span id="int-id">0</span></span>
                     </div>
 
-                    <div id="int-meta-group" style="display:flex; gap:5px;">
-                        <select id="int-method" class="code-input" style="width:80px;"><option>GET</option><option>POST</option></select>
+                    <div id="int-meta-group" class="meta-row">
+                        <select id="int-method" class="code-input" style="width:70px;"><option>GET</option><option>POST</option></select>
                         <input type="text" id="int-url" class="code-input" style="flex:1;">
                     </div>
 
-                    <div id="int-status-group" style="display:none;">
-                        <input type="number" id="int-status" class="code-input" placeholder="Status Code">
+                    <div id="int-status-group" class="meta-row" style="display:none;">
+                        <input type="number" id="int-status" class="code-input" placeholder="Status" style="width:100%">
                     </div>
 
+                    <!-- This textarea now Flexes to fill available height -->
                     <textarea id="int-body" class="code-input" placeholder="Body / Payload"></textarea>
 
                     <div class="action-row">
@@ -136,13 +176,13 @@ const FRONTEND_UI = `
         <!-- 3. REPEATER -->
         <div id="view-repeat" class="view">
             <div class="repeater-view">
-                <div style="display:flex; gap:5px;">
-                    <select id="rep-method" class="code-input" style="width:80px;"><option>GET</option><option>POST</option></select>
+                <div class="meta-row">
+                    <select id="rep-method" class="code-input" style="width:70px;"><option>GET</option><option>POST</option></select>
                     <input type="text" id="rep-url" class="code-input" style="flex:1;">
                 </div>
-                <textarea id="rep-body" class="code-input" style="height:120px; min-height:120px; flex:none;"></textarea>
-                <button class="btn btn-fwd" onclick="executeRepeater()" id="btn-rep-send">Send Request</button>
-                <div id="rep-response" class="code-input" style="flex:1; overflow:auto; background:#111; color:#ccc;">Response...</div>
+                <textarea id="rep-body" class="code-input" style="flex: 1; max-height: 150px;" placeholder="Request Body"></textarea>
+                <button class="btn btn-fwd" onclick="executeRepeater()" id="btn-rep-send" style="flex-shrink:0;">Send Request</button>
+                <div id="rep-response" class="code-input" style="flex: 2; overflow:auto; background:#111; color:#ccc; white-space: pre-wrap;">Response...</div>
             </div>
         </div>
     </div>
@@ -152,41 +192,34 @@ const FRONTEND_UI = `
         let currentPhase = null; 
         let currentId = null;
 
-        // Listeners
+        // Auto-switch to intercept tab on traffic
         socket.on('intercept_request', (data) => handleTraffic('request', data));
         socket.on('intercept_response', (data) => handleTraffic('response', data));
 
         function handleTraffic(type, data) {
-            // 1. Force Switch to Interceptor Tab so user sees it
+            // Immediate Tab Switch
             switchTab('intercept');
-
-            // 2. Visuals
+            
             document.getElementById('badge-intercept').classList.add('visible');
             currentPhase = type;
             currentId = data.id;
 
             document.getElementById('intercept-empty').style.display = 'none';
-            document.getElementById('intercept-active').style.display = 'flex';
+            document.getElementById('intercept-active').style.display = 'flex'; // Flex is crucial for layout
             document.getElementById('int-id').innerText = data.id;
             
-            // Body Formatting
+            // Format Body
             let displayBody = data.body;
             if (typeof displayBody === 'object') {
-                // Pretty print object if possible, or convert to query string
-                try { 
-                    displayBody = JSON.stringify(displayBody, null, 2); 
-                } catch(e) {
-                    displayBody = data.body;
-                }
+                try { displayBody = JSON.stringify(displayBody, null, 2); } catch(e){}
             }
             document.getElementById('int-body').value = displayBody || '';
 
-            // Setup Fields based on Type
             const badge = document.getElementById('int-badge');
             
             if (type === 'request') {
                 badge.innerText = 'OUTGOING REQUEST';
-                badge.style.color = '#2196f3'; // Blue
+                badge.style.color = '#2196f3';
                 document.getElementById('int-meta-group').style.display = 'flex';
                 document.getElementById('int-status-group').style.display = 'none';
                 document.getElementById('btn-to-rep').style.display = 'block';
@@ -194,9 +227,9 @@ const FRONTEND_UI = `
                 document.getElementById('int-method').value = data.method;
             } else {
                 badge.innerText = 'INCOMING RESPONSE';
-                badge.style.color = '#4caf50'; // Green
+                badge.style.color = '#4caf50';
                 document.getElementById('int-meta-group').style.display = 'none';
-                document.getElementById('int-status-group').style.display = 'block';
+                document.getElementById('int-status-group').style.display = 'flex'; // Changed to flex
                 document.getElementById('btn-to-rep').style.display = 'none';
                 document.getElementById('int-status').value = data.status;
             }
@@ -205,9 +238,12 @@ const FRONTEND_UI = `
         function forwardRequest() {
             if (!currentId) return;
             let body = document.getElementById('int-body').value;
-
-            // Try to parse back to object if it looks like JSON (for repeater compatibility)
-            try { body = JSON.parse(body); } catch(e) {}
+            
+            // Attempt to restore object structure if it was JSON
+            try { 
+                const parsed = JSON.parse(body);
+                if(parsed && typeof parsed === 'object') body = parsed;
+            } catch(e) {}
 
             if (currentPhase === 'request') {
                 socket.emit('forward_request', {
@@ -223,15 +259,16 @@ const FRONTEND_UI = `
                     body: body
                 });
             }
-            clearInterceptUI();
-        }
-
-        function dropRequest() { clearInterceptUI(); }
-
-        function clearInterceptUI() {
+            // Clear but don't switch tab immediately, user might want to stay
             document.getElementById('intercept-empty').style.display = 'block';
             document.getElementById('intercept-active').style.display = 'none';
             document.getElementById('badge-intercept').classList.remove('visible');
+            currentId = null;
+        }
+
+        function dropRequest() {
+            document.getElementById('intercept-empty').style.display = 'block';
+            document.getElementById('intercept-active').style.display = 'none';
             currentId = null;
         }
 
@@ -248,7 +285,6 @@ const FRONTEND_UI = `
             btn.innerText = "Sending..."; btn.disabled = true;
 
             try {
-                // Ensure body is stringified properly if it's an object
                 let bodyVal = document.getElementById('rep-body').value;
                 try { bodyVal = JSON.parse(bodyVal); } catch(e){}
 
@@ -290,19 +326,17 @@ app.get('/', (req, res) => res.send(FRONTEND_UI));
 app.post('/api/repeat', async (req, res) => {
     try {
         const { url, method, body } = req.body;
-        // Fix for Repeater: Send form data correctly if needed
+        // Repeater: try to send as form if it's an object and POST
         let dataToSend = body;
-        let contentType = 'application/json';
-
-        // If it was parsed as an object but method is POST, try to convert to form data if it looks like one
+        let cType = 'application/json';
         if (method === 'POST' && typeof body === 'object') {
             dataToSend = querystring.stringify(body);
-            contentType = 'application/x-www-form-urlencoded';
+            cType = 'application/x-www-form-urlencoded';
         }
 
         const response = await axios({
             url, method, data: dataToSend,
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': contentType },
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': cType },
             validateStatus: () => true, responseType: 'arraybuffer'
         });
         res.json({ status: response.status, body: response.data.toString('utf-8') });
@@ -317,52 +351,48 @@ app.all('/proxy', async (req, res) => {
     const incomingBody = (incomingMethod === 'POST') ? req.body : '';
 
     try {
-        // --- PHASE 1: INTERCEPT REQUEST ---
+        // --- REQUEST PHASE ---
         io.emit('intercept_request', { 
             id: reqId, url: targetUrl, method: incomingMethod, body: incomingBody 
         });
         
         const modReq = await waitForSignal(reqId, 'request');
 
-        // --- PHASE 2: REAL REQUEST ---
-        // Crucial Fix: Ensure Form Data is stringified if Axios needs it
+        // Prepare Real Request
         let realBody = modReq.body;
-        let contentType = 'application/x-www-form-urlencoded'; // Standard for forms
-
-        // If the body is an object (from our express parser), stringify it for the outgoing request
+        let cType = 'application/x-www-form-urlencoded';
+        
         if (typeof realBody === 'object' && modReq.method === 'POST') {
             realBody = querystring.stringify(realBody);
         }
-        // If user typed raw JSON in interceptor, let's try to send as JSON? 
-        // For now, we stick to form simulation as that's what browsers do naturally.
 
         const response = await axios({
             url: modReq.url,
             method: modReq.method,
             data: realBody,
-            headers: { 
-                'User-Agent': 'Mozilla/5.0',
-                'Content-Type': contentType 
-            },
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': cType },
             validateStatus: () => true,
             responseType: 'arraybuffer'
         });
 
-        // --- PHASE 3: INTERCEPT RESPONSE ---
+        // --- RESPONSE PHASE ---
         let bodyStr = response.data.toString('utf-8');
         io.emit('intercept_response', { id: reqId, status: response.status, body: bodyStr });
         const modRes = await waitForSignal(reqId, 'response');
 
-        // --- PHASE 4: INJECT SCRIPTS & SEND ---
+        // --- INJECTION PHASE ---
         let finalBody = modRes.body;
         res.removeHeader("Content-Security-Policy");
         res.removeHeader("X-Frame-Options");
 
+        // Advanced Script Injection for Forms & Links
         const scriptInjection = `
             <base href="${modReq.url}">
             <script>
                 const PROXY_BASE = window.location.origin + '/proxy?url=';
+                console.log("Interceptor Loaded on: " + window.location.href);
 
+                // Hijack Links
                 document.addEventListener('click', function(e) {
                     const anchor = e.target.closest('a');
                     if (anchor && anchor.href && !anchor.href.startsWith('javascript:')) {
@@ -371,12 +401,15 @@ app.all('/proxy', async (req, res) => {
                     }
                 });
                 
+                // Hijack Forms (POST & GET)
                 document.addEventListener('submit', function(e) {
                     e.preventDefault();
                     const form = e.target;
                     const action = form.action || window.location.href;
                     const method = (form.method || 'GET').toUpperCase();
                     
+                    console.log("Hijacking form submit to: " + action);
+
                     if (method === 'POST') {
                         const tempForm = document.createElement('form');
                         tempForm.method = 'POST';
