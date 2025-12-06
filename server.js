@@ -51,6 +51,8 @@ const FRONTEND_UI = `
         .btn-drop { background: var(--danger); }
         .btn-rep { background: #ff9800; color: black; }
         .repeater-view { padding: 15px; display: flex; flex-direction: column; gap: 10px; height: 100%; overflow-y: auto; }
+        /* Added white-space pre-wrap so newlines show correctly in repeater response */
+        #rep-response { white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -189,7 +191,10 @@ const FRONTEND_UI = `
                     body: JSON.stringify({ url: document.getElementById('rep-url').value, method: document.getElementById('rep-method').value, body: document.getElementById('rep-body').value })
                 });
                 const data = await res.json();
-                out.innerText = `STATUS: ${data.status}\n\n${data.body}`;
+                
+                // FIXED LINE: Use single quotes and concatenation to avoid server syntax error
+                out.innerText = 'STATUS: ' + data.status + '\\n\\n' + data.body;
+                
             } catch (err) { out.innerText = err.message; }
             btn.innerText = "Send Request"; btn.disabled = false;
         }
@@ -249,19 +254,15 @@ app.all('/proxy', async (req, res) => {
         res.removeHeader("Content-Security-Policy");
         res.removeHeader("X-Frame-Options");
 
-        // --- THE FIX: Absolute Proxy URL Injection ---
         const scriptInjection = `
             <base href="${modReq.url}">
             <script>
-                // We calculate the PROXY origin (Your Render App URL) dynamically to avoid 404s
-                // This ensures we don't accidentally send requests to google.com/proxy
                 const PROXY_BASE = window.location.origin + '/proxy?url=';
 
                 document.addEventListener('click', function(e) {
                     const anchor = e.target.closest('a');
                     if (anchor && anchor.href && !anchor.href.startsWith('javascript:')) {
                         e.preventDefault();
-                        // Force redirection to OUR proxy, not the external site
                         window.location.href = PROXY_BASE + encodeURIComponent(anchor.href);
                     }
                 });
@@ -275,7 +276,6 @@ app.all('/proxy', async (req, res) => {
                     if (method === 'POST') {
                         const tempForm = document.createElement('form');
                         tempForm.method = 'POST';
-                        // Force action to be absolute path to our proxy
                         tempForm.action = PROXY_BASE + encodeURIComponent(action);
                         tempForm.style.display = 'none';
                         
