@@ -17,6 +17,10 @@ app.use(express.urlencoded({ extended: true }));
 
 const pendingInterceptions = {};
 
+// User Agents
+const UA_MOBILE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+const UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 const FRONTEND_UI = `
 <!DOCTYPE html>
 <html lang="en">
@@ -39,7 +43,7 @@ const FRONTEND_UI = `
             display: flex; flex-direction: column; height: 100dvh; overflow: hidden; 
         }
 
-        /* COMPACT TOP NAV */
+        /* TOP NAV */
         .top-nav { 
             height: var(--nav-height); background: #1a1a1a; border-bottom: 1px solid var(--border); 
             display: flex; justify-content: space-around; align-items: center; 
@@ -57,7 +61,6 @@ const FRONTEND_UI = `
         }
         .badge-dot.visible { display: block; }
 
-        /* VIEWPORT */
         .viewport { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; }
         .view { display: none; height: 100%; flex-direction: column; width: 100%; }
         .view.active { display: flex; }
@@ -65,56 +68,56 @@ const FRONTEND_UI = `
         /* BROWSER TAB */
         .url-bar { 
             padding: 8px; background: var(--card); display: flex; gap: 8px; 
-            border-bottom: 1px solid var(--border); flex-shrink: 0; 
+            border-bottom: 1px solid var(--border); flex-shrink: 0; align-items: center;
         }
         .url-input { 
             flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; 
             padding: 6px 10px; border-radius: 4px; outline: none; font-size: 13px; 
         }
+        /* Mode Select Dropdown */
+        .mode-select {
+            background: #333; color: white; border: 1px solid #444; border-radius: 4px;
+            padding: 6px; font-size: 12px; outline: none;
+        }
         .btn-go { 
-            background: var(--success); color: white; border: none; padding: 0 12px; 
+            background: var(--success); color: white; border: none; padding: 0 12px; height: 30px;
             border-radius: 4px; font-weight: bold; font-size: 12px; 
         }
-        iframe { flex: 1; border: none; background: white; }
-
-        /* INTERCEPTOR TAB (FIXED LAYOUT) */
-        .interceptor-view { 
-            padding: 10px; flex: 1; display: flex; flex-direction: column; overflow: hidden; 
-        }
         
-        /* The card now takes full height and manages its own overflow */
+        /* Iframe Container to handle PC/Mobile sizing */
+        #frame-container {
+            flex: 1; width: 100%; height: 100%; overflow: hidden; position: relative;
+        }
+        iframe { width: 100%; height: 100%; border: none; background: white; transition: width 0.3s; }
+
+        /* PC Mode: Force wide width and allow scroll */
+        .pc-mode { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+        .pc-mode iframe { width: 1024px !important; min-width: 1024px; }
+
+
+        /* INTERCEPTOR TAB */
+        .interceptor-view { padding: 10px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .req-card { 
             background: var(--card); border-radius: 8px; padding: 10px; 
             display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); 
             height: 100%; overflow: hidden;
         }
-
         .card-header { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
-        .badge { font-weight: bold; font-size: 13px; }
-
         .meta-row { display: flex; gap: 5px; flex-shrink: 0; }
-
         .code-input { 
             background: #000; border: 1px solid #333; color: #0f0; padding: 8px; 
             border-radius: 4px; font-family: monospace; font-size: 12px; 
         }
-        
-        /* Textarea grows to fill space, but scrolls internally */
-        textarea.code-input { 
-            flex: 1; min-height: 0; resize: none; overflow-y: auto; 
-        }
-
+        textarea.code-input { flex: 1; min-height: 0; resize: none; overflow-y: auto; }
         .action-row { display: flex; gap: 8px; margin-top: auto; flex-shrink: 0; padding-top: 5px; }
-        .btn { 
-            flex: 1; padding: 12px; border: none; border-radius: 4px; 
-            font-weight: bold; color: white; font-size: 13px; 
-        }
+        .btn { flex: 1; padding: 12px; border: none; border-radius: 4px; font-weight: bold; color: white; font-size: 13px; }
         .btn-fwd { background: var(--success); }
         .btn-drop { background: var(--danger); }
         .btn-rep { background: #ff9800; color: black; }
 
         /* REPEATER TAB */
         .repeater-view { padding: 10px; display: flex; flex-direction: column; gap: 8px; height: 100%; overflow: hidden; }
+        #rep-response { white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -133,9 +136,15 @@ const FRONTEND_UI = `
         <div id="view-browser" class="view active">
             <div class="url-bar">
                 <input type="text" id="browser-url" class="url-input" value="https://jsonplaceholder.typicode.com/posts/1">
+                <select id="view-mode" class="mode-select" onchange="navigate()">
+                    <option value="mobile">Mobile</option>
+                    <option value="pc">PC View</option>
+                </select>
                 <button class="btn-go" onclick="navigate()">GO</button>
             </div>
-            <iframe id="web-frame" src="about:blank"></iframe>
+            <div id="frame-container">
+                <iframe id="web-frame" src="about:blank"></iframe>
+            </div>
         </div>
 
         <!-- 2. INTERCEPT -->
@@ -145,25 +154,19 @@ const FRONTEND_UI = `
                     <h3>Ready</h3>
                     <p>Traffic will appear here.</p>
                 </div>
-
                 <div id="intercept-active" class="req-card" style="display:none;">
                     <div class="card-header">
-                        <span id="int-badge" class="badge">REQUEST</span>
+                        <span id="int-badge" style="font-weight:bold; font-size:13px;">REQUEST</span>
                         <span style="font-size:11px; color:#666">ID: <span id="int-id">0</span></span>
                     </div>
-
                     <div id="int-meta-group" class="meta-row">
                         <select id="int-method" class="code-input" style="width:70px;"><option>GET</option><option>POST</option></select>
                         <input type="text" id="int-url" class="code-input" style="flex:1;">
                     </div>
-
                     <div id="int-status-group" class="meta-row" style="display:none;">
                         <input type="number" id="int-status" class="code-input" placeholder="Status" style="width:100%">
                     </div>
-
-                    <!-- This textarea now Flexes to fill available height -->
                     <textarea id="int-body" class="code-input" placeholder="Body / Payload"></textarea>
-
                     <div class="action-row">
                         <button class="btn btn-drop" onclick="dropRequest()">Drop</button>
                         <button id="btn-to-rep" class="btn btn-rep" onclick="sendToRepeater()">Repeat</button>
@@ -192,29 +195,24 @@ const FRONTEND_UI = `
         let currentPhase = null; 
         let currentId = null;
 
-        // Auto-switch to intercept tab on traffic
         socket.on('intercept_request', (data) => handleTraffic('request', data));
         socket.on('intercept_response', (data) => handleTraffic('response', data));
 
         function handleTraffic(type, data) {
-            // Immediate Tab Switch
             switchTab('intercept');
-            
             document.getElementById('badge-intercept').classList.add('visible');
             currentPhase = type;
             currentId = data.id;
 
             document.getElementById('intercept-empty').style.display = 'none';
-            document.getElementById('intercept-active').style.display = 'flex'; // Flex is crucial for layout
+            document.getElementById('intercept-active').style.display = 'flex'; 
             document.getElementById('int-id').innerText = data.id;
             
-            // Format Body
             let displayBody = data.body;
             if (typeof displayBody === 'object') {
                 try { displayBody = JSON.stringify(displayBody, null, 2); } catch(e){}
             }
             document.getElementById('int-body').value = displayBody || '';
-
             const badge = document.getElementById('int-badge');
             
             if (type === 'request') {
@@ -229,7 +227,7 @@ const FRONTEND_UI = `
                 badge.innerText = 'INCOMING RESPONSE';
                 badge.style.color = '#4caf50';
                 document.getElementById('int-meta-group').style.display = 'none';
-                document.getElementById('int-status-group').style.display = 'flex'; // Changed to flex
+                document.getElementById('int-status-group').style.display = 'flex';
                 document.getElementById('btn-to-rep').style.display = 'none';
                 document.getElementById('int-status').value = data.status;
             }
@@ -238,8 +236,6 @@ const FRONTEND_UI = `
         function forwardRequest() {
             if (!currentId) return;
             let body = document.getElementById('int-body').value;
-            
-            // Attempt to restore object structure if it was JSON
             try { 
                 const parsed = JSON.parse(body);
                 if(parsed && typeof parsed === 'object') body = parsed;
@@ -259,7 +255,6 @@ const FRONTEND_UI = `
                     body: body
                 });
             }
-            // Clear but don't switch tab immediately, user might want to stay
             document.getElementById('intercept-empty').style.display = 'block';
             document.getElementById('intercept-active').style.display = 'none';
             document.getElementById('badge-intercept').classList.remove('visible');
@@ -305,7 +300,17 @@ const FRONTEND_UI = `
 
         function navigate() {
             const url = document.getElementById('browser-url').value;
-            document.getElementById('web-frame').src = '/proxy?url=' + encodeURIComponent(url);
+            const mode = document.getElementById('view-mode').value;
+            const container = document.getElementById('frame-container');
+            
+            // Adjust CSS for PC/Mobile view
+            if(mode === 'pc') {
+                container.classList.add('pc-mode');
+            } else {
+                container.classList.remove('pc-mode');
+            }
+
+            document.getElementById('web-frame').src = '/proxy?url=' + encodeURIComponent(url) + '&mode=' + mode;
         }
 
         function switchTab(name) {
@@ -326,7 +331,6 @@ app.get('/', (req, res) => res.send(FRONTEND_UI));
 app.post('/api/repeat', async (req, res) => {
     try {
         const { url, method, body } = req.body;
-        // Repeater: try to send as form if it's an object and POST
         let dataToSend = body;
         let cType = 'application/json';
         if (method === 'POST' && typeof body === 'object') {
@@ -336,7 +340,7 @@ app.post('/api/repeat', async (req, res) => {
 
         const response = await axios({
             url, method, data: dataToSend,
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': cType },
+            headers: { 'User-Agent': UA_MOBILE, 'Content-Type': cType },
             validateStatus: () => true, responseType: 'arraybuffer'
         });
         res.json({ status: response.status, body: response.data.toString('utf-8') });
@@ -345,20 +349,20 @@ app.post('/api/repeat', async (req, res) => {
 
 app.all('/proxy', async (req, res) => {
     const targetUrl = req.query.url;
+    const viewMode = req.query.mode || 'mobile';
+
     if (!targetUrl) return res.send("No URL provided");
     const reqId = Date.now().toString();
     const incomingMethod = req.method;
     const incomingBody = (incomingMethod === 'POST') ? req.body : '';
 
     try {
-        // --- REQUEST PHASE ---
         io.emit('intercept_request', { 
             id: reqId, url: targetUrl, method: incomingMethod, body: incomingBody 
         });
         
         const modReq = await waitForSignal(reqId, 'request');
 
-        // Prepare Real Request
         let realBody = modReq.body;
         let cType = 'application/x-www-form-urlencoded';
         
@@ -366,33 +370,35 @@ app.all('/proxy', async (req, res) => {
             realBody = querystring.stringify(realBody);
         }
 
+        // Select User Agent based on View Mode
+        const currentUserAgent = (viewMode === 'pc') ? UA_DESKTOP : UA_MOBILE;
+
         const response = await axios({
             url: modReq.url,
             method: modReq.method,
             data: realBody,
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': cType },
+            headers: { 'User-Agent': currentUserAgent, 'Content-Type': cType },
             validateStatus: () => true,
             responseType: 'arraybuffer'
         });
 
-        // --- RESPONSE PHASE ---
         let bodyStr = response.data.toString('utf-8');
         io.emit('intercept_response', { id: reqId, status: response.status, body: bodyStr });
         const modRes = await waitForSignal(reqId, 'response');
 
-        // --- INJECTION PHASE ---
         let finalBody = modRes.body;
         res.removeHeader("Content-Security-Policy");
         res.removeHeader("X-Frame-Options");
 
-        // Advanced Script Injection for Forms & Links
         const scriptInjection = `
             <base href="${modReq.url}">
             <script>
-                const PROXY_BASE = window.location.origin + '/proxy?url=';
-                console.log("Interceptor Loaded on: " + window.location.href);
+                // We persist the view mode (mobile/pc) when clicking links
+                const CURRENT_MODE = '${viewMode}';
+                const PROXY_BASE = window.location.origin + '/proxy?mode=' + CURRENT_MODE + '&url=';
+                
+                console.log("Interceptor: " + CURRENT_MODE);
 
-                // Hijack Links
                 document.addEventListener('click', function(e) {
                     const anchor = e.target.closest('a');
                     if (anchor && anchor.href && !anchor.href.startsWith('javascript:')) {
@@ -401,15 +407,12 @@ app.all('/proxy', async (req, res) => {
                     }
                 });
                 
-                // Hijack Forms (POST & GET)
                 document.addEventListener('submit', function(e) {
                     e.preventDefault();
                     const form = e.target;
                     const action = form.action || window.location.href;
                     const method = (form.method || 'GET').toUpperCase();
                     
-                    console.log("Hijacking form submit to: " + action);
-
                     if (method === 'POST') {
                         const tempForm = document.createElement('form');
                         tempForm.method = 'POST';
