@@ -10,9 +10,10 @@ const server = http.createServer(app);
 // Use the PORT Render gives us, or 10000 if testing locally
 const PORT = process.env.PORT || 10000;
 
+// Setup Socket.io with CORS enabled for the cloud
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow connections from any Render domain
+        origin: "*", 
         methods: ["GET", "POST"]
     }
 });
@@ -83,6 +84,7 @@ const FRONTEND_UI = `
     </div>
 
     <div class="main">
+        <!-- BROWSER VIEW -->
         <div id="view-browser" class="view active">
             <div class="address-bar">
                 <input type="text" id="url-input" value="https://jsonplaceholder.typicode.com/posts/1" placeholder="Enter URL...">
@@ -91,6 +93,7 @@ const FRONTEND_UI = `
             <iframe id="web-frame" src="about:blank"></iframe>
         </div>
 
+        <!-- INTERCEPTOR VIEW -->
         <div id="view-interceptor" class="view">
             <div id="empty-state" class="empty-msg">
                 <h3>Tunnel Open</h3>
@@ -105,6 +108,7 @@ const FRONTEND_UI = `
                     </div>
 
                     <div class="editor-section">
+                        <!-- Request Fields -->
                         <div id="req-fields">
                             <div class="field-group">
                                 <label>Target URL</label>
@@ -119,6 +123,7 @@ const FRONTEND_UI = `
                             </div>
                         </div>
 
+                        <!-- Response Fields -->
                         <div id="res-fields" style="display:none;">
                             <div class="field-group">
                                 <label>Status Code</label>
@@ -126,6 +131,7 @@ const FRONTEND_UI = `
                             </div>
                         </div>
 
+                        <!-- Shared Body Field -->
                         <div class="field-group" style="flex:1;">
                             <label>Body / Payload / HTML</label>
                             <textarea id="edit-body"></textarea>
@@ -286,7 +292,7 @@ app.get('/proxy', async (req, res) => {
         const response = await axios({
             url: modifiedReq.url,
             method: modifiedReq.method,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             validateStatus: () => true, // Don't throw error on 404
             responseType: 'arraybuffer' // Get raw data
         });
@@ -357,3 +363,4 @@ io.on('connection', (socket) => {
 server.listen(PORT, () => {
     console.log(`\n🔥 Server is live on PORT: ${PORT}`);
 });
+
