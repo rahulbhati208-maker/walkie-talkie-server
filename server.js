@@ -3,364 +3,462 @@ const http = require('http');
 const { Server } = require("socket.io");
 const axios = require('axios');
 
-// --- RENDER CONFIGURATION ---
+// --- SERVER SETUP ---
 const app = express();
 const server = http.createServer(app);
-
-// Use the PORT Render gives us, or 10000 if testing locally
 const PORT = process.env.PORT || 10000;
 
-// Setup Socket.io with CORS enabled for the cloud
+// Enable CORS for cloud hosting
 const io = new Server(server, {
-    cors: {
-        origin: "*", 
-        methods: ["GET", "POST"]
-    }
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// Store pending requests (The "Pause" Memory)
+// Middleware to parse JSON for the Repeater
+app.use(express.json());
+
+// Store pending requests for the Interceptor
 const pendingInterceptions = {};
 
-// --- 1. THE FRONTEND UI (Served as a String) ---
+// --- FRONTEND UI (Mobile First) ---
 const FRONTEND_UI = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Walkie-Talkie Interceptor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile Proxy</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root { --bg: #121212; --panel: #1e1e1e; --border: #333; --accent: #00bcd4; --text: #e0e0e0; }
-        body { margin: 0; font-family: 'Segoe UI', monospace; background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; }
-        
-        /* SIDEBAR */
-        .sidebar { width: 250px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-        .sidebar h2 { padding: 20px; margin: 0; font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
-        .nav-btn { padding: 15px 20px; background: transparent; border: none; color: #888; text-align: left; cursor: pointer; border-left: 3px solid transparent; transition: 0.2s; font-size: 14px; }
-        .nav-btn:hover { background: #2d2d2d; color: white; }
-        .nav-btn.active { background: #252526; color: white; border-left-color: var(--accent); }
-        .nav-btn.alert { color: #ff9800; border-left-color: #ff9800; animation: flash 1s infinite; }
-        @keyframes flash { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        :root {
+            --bg: #121212;
+            --card: #1e1e1e;
+            --border: #333;
+            --accent: #2196f3;
+            --danger: #f44336;
+            --success: #4caf50;
+            --text: #e0e0e0;
+            --tab-height: 60px;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-        /* MAIN AREA */
-        .main { flex: 1; display: flex; flex-direction: column; position: relative; }
-        .view { display: none; height: 100%; flex-direction: column; }
+        /* --- MAIN VIEW AREA --- */
+        .viewport { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+        .view { display: none; height: 100%; flex-direction: column; width: 100%; }
         .view.active { display: flex; }
 
-        /* BROWSER TAB */
-        .address-bar { padding: 10px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
-        .address-bar input { flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; padding: 8px 12px; border-radius: 4px; font-family: monospace; }
-        .btn-go { background: #4caf50; color: white; border: none; padding: 0 20px; cursor: pointer; font-weight: bold; border-radius: 4px; }
+        /* --- BOTTOM NAVIGATION --- */
+        .bottom-nav { height: var(--tab-height); background: #1a1a1a; border-top: 1px solid var(--border); display: flex; justify-content: space-around; align-items: center; padding-bottom: env(safe-area-inset-bottom); z-index: 100; }
+        .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #666; font-size: 10px; gap: 4px; background: none; border: none; position: relative; }
+        .nav-item.active { color: var(--accent); }
+        .nav-icon { font-size: 20px; }
+        
+        /* Notification Dot */
+        .badge-dot { position: absolute; top: 8px; right: 30%; width: 10px; height: 10px; background: var(--danger); border-radius: 50%; border: 2px solid #1a1a1a; display: none; }
+        .badge-dot.visible { display: block; }
+
+        /* --- BROWSER TAB --- */
+        .url-bar-container { padding: 10px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+        .url-input { flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; padding: 8px 12px; border-radius: 8px; font-size: 14px; outline: none; }
+        .btn-go { background: var(--success); color: white; border: none; padding: 0 15px; border-radius: 8px; font-weight: bold; }
         iframe { flex: 1; border: none; background: white; }
 
-        /* INTERCEPTOR TAB */
-        .interceptor-container { padding: 20px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
-        .empty-msg { text-align: center; color: #555; margin-top: 100px; }
+        /* --- INTERCEPTOR TAB --- */
+        .interceptor-view { padding: 15px; overflow-y: auto; height: 100%; }
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 60%; color: #555; text-align: center; }
         
-        .intercept-card { display: flex; flex-direction: column; height: 100%; gap: 15px; }
-        .card-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; text-transform: uppercase; }
-        .badge.req { background: #2196f3; color: white; }
-        .badge.res { background: #4caf50; color: white; }
+        .req-card { background: var(--card); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--border); height: 100%; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid #333; }
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+        .status-badge.req { background: #2196f333; color: #64b5f6; }
+        .status-badge.res { background: #4caf5033; color: #81c784; }
 
-        .editor-section { flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-        .field-group { display: flex; flex-direction: column; gap: 5px; }
-        label { font-size: 12px; color: #888; }
-        input, textarea, select { background: #1a1a1a; border: 1px solid #444; color: #0f0; padding: 10px; font-family: 'Consolas', monospace; font-size: 13px; }
-        textarea { resize: vertical; min-height: 200px; }
+        .input-group { display: flex; flex-direction: column; gap: 6px; }
+        .label { font-size: 11px; color: #888; font-weight: 600; }
+        .code-input { background: #000; border: 1px solid #333; color: #0f0; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 12px; }
+        textarea.code-input { flex: 1; resize: none; min-height: 150px; }
 
-        .controls { padding-top: 15px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
-        .btn-fwd { background: var(--accent); color: white; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; }
-        .btn-drop { background: #f44336; color: white; border: none; padding: 10px 20px; cursor: pointer; }
+        .action-row { display: flex; gap: 10px; margin-top: auto; padding-top: 10px; }
+        .btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; color: white; }
+        .btn-fwd { background: var(--success); }
+        .btn-drop { background: var(--danger); }
+        .btn-repeat { background: #ff9800; color: black; }
+
+        /* --- REPEATER TAB --- */
+        .repeater-view { padding: 15px; display: flex; flex-direction: column; gap: 15px; height: 100%; overflow-y: auto; }
+        .repeater-response { flex: 1; background: #000; border: 1px solid #333; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 11px; color: #ccc; overflow: auto; white-space: pre-wrap; }
     </style>
 </head>
 <body>
 
-    <div class="sidebar">
-        <h2>Interceptor Tool</h2>
-        <button class="nav-btn active" id="tab-browser" onclick="switchTab('browser')">🌐 Browser</button>
-        <button class="nav-btn" id="tab-interceptor" onclick="switchTab('interceptor')">🛡️ Interceptor</button>
-    </div>
-
-    <div class="main">
-        <!-- BROWSER VIEW -->
+    <div class="viewport">
+        <!-- 1. BROWSER -->
         <div id="view-browser" class="view active">
-            <div class="address-bar">
-                <input type="text" id="url-input" value="https://jsonplaceholder.typicode.com/posts/1" placeholder="Enter URL...">
+            <div class="url-bar-container">
+                <input type="text" id="browser-url" class="url-input" value="https://jsonplaceholder.typicode.com/posts/1">
                 <button class="btn-go" onclick="navigate()">GO</button>
             </div>
             <iframe id="web-frame" src="about:blank"></iframe>
         </div>
 
-        <!-- INTERCEPTOR VIEW -->
-        <div id="view-interceptor" class="view">
-            <div id="empty-state" class="empty-msg">
-                <h3>Tunnel Open</h3>
-                <p>Waiting for traffic...</p>
-            </div>
-            
-            <div id="active-intercept" class="interceptor-container" style="display:none;">
-                <div class="intercept-card">
+        <!-- 2. INTERCEPTOR -->
+        <div id="view-intercept" class="view">
+            <div class="interceptor-view">
+                <div id="intercept-empty" class="empty-state">
+                    <div style="font-size: 40px; margin-bottom: 10px;">🛡️</div>
+                    <div>No pending traffic</div>
+                    <div style="font-size: 12px; margin-top: 5px;">Requests will appear here</div>
+                </div>
+
+                <div id="intercept-active" class="req-card" style="display:none;">
                     <div class="card-header">
-                        <span id="int-type" class="badge req">Request</span>
-                        <span style="font-size:12px; color:#666">ID: <span id="int-id">0</span></span>
+                        <span id="int-badge" class="status-badge req">Outgoing Request</span>
+                        <span style="font-size:11px; color:#666">ID: <span id="int-id">...</span></span>
                     </div>
 
-                    <div class="editor-section">
-                        <!-- Request Fields -->
-                        <div id="req-fields">
-                            <div class="field-group">
-                                <label>Target URL</label>
-                                <input type="text" id="edit-url">
-                            </div>
-                            <div class="field-group">
-                                <label>Method</label>
-                                <select id="edit-method">
-                                    <option value="GET">GET</option>
-                                    <option value="POST">POST</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <!-- Response Fields -->
-                        <div id="res-fields" style="display:none;">
-                            <div class="field-group">
-                                <label>Status Code</label>
-                                <input type="number" id="edit-status">
-                            </div>
-                        </div>
-
-                        <!-- Shared Body Field -->
-                        <div class="field-group" style="flex:1;">
-                            <label>Body / Payload / HTML</label>
-                            <textarea id="edit-body"></textarea>
+                    <!-- URL/Method Inputs -->
+                    <div class="input-group" id="int-meta-group">
+                        <span class="label">METHOD & URL</span>
+                        <div style="display:flex; gap: 5px;">
+                            <select id="int-method" class="code-input" style="width: 80px;">
+                                <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>
+                            </select>
+                            <input type="text" id="int-url" class="code-input" style="flex:1;">
                         </div>
                     </div>
 
-                    <div class="controls">
-                        <button class="btn-drop" onclick="dropAction()">Drop</button>
-                        <button class="btn-fwd" onclick="forwardAction()">Forward >></button>
+                    <!-- Status Code Input (Response only) -->
+                    <div class="input-group" id="int-status-group" style="display:none;">
+                        <span class="label">STATUS CODE</span>
+                        <input type="number" id="int-status" class="code-input">
                     </div>
+
+                    <!-- Body Input -->
+                    <div class="input-group" style="flex:1;">
+                        <span class="label">BODY / PAYLOAD</span>
+                        <textarea id="int-body" class="code-input"></textarea>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="action-row">
+                        <button class="btn btn-drop" onclick="dropRequest()">Drop</button>
+                        <!-- Only show Send to Repeater for Requests -->
+                        <button id="btn-to-repeater" class="btn btn-repeat" onclick="sendToRepeaterFromIntercept()">Repeat</button>
+                        <button class="btn btn-fwd" onclick="forwardRequest()">Forward</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. REPEATER -->
+        <div id="view-repeat" class="view">
+            <div class="repeater-view">
+                <div class="card-header">
+                    <span class="status-badge" style="background:#ff9800; color:black">Repeater</span>
+                    <button onclick="clearRepeater()" style="background:none; border:none; color:#666; font-size:11px;">Clear</button>
+                </div>
+
+                <div class="input-group">
+                    <span class="label">TARGET</span>
+                    <div style="display:flex; gap: 5px;">
+                        <select id="rep-method" class="code-input" style="width: 80px;">
+                            <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>
+                        </select>
+                        <input type="text" id="rep-url" class="code-input" style="flex:1;" placeholder="https://...">
+                    </div>
+                </div>
+
+                <div class="input-group" style="height: 120px;">
+                    <span class="label">REQUEST BODY</span>
+                    <textarea id="rep-body" class="code-input" placeholder="{ json... }"></textarea>
+                </div>
+
+                <button class="btn btn-fwd" onclick="executeRepeater()" id="btn-rep-send">Send Request</button>
+
+                <div class="input-group" style="flex:1;">
+                    <span class="label">RESPONSE</span>
+                    <div id="rep-response" class="repeater-response">No response yet...</div>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- BOTTOM NAV -->
+    <div class="bottom-nav">
+        <button class="nav-item active" onclick="switchTab('browser')">
+            <span class="nav-icon">🌐</span>
+            <span>Browser</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('intercept')">
+            <span class="nav-icon">🛡️</span>
+            <span>Intercept</span>
+            <div id="badge-intercept" class="badge-dot"></div>
+        </button>
+        <button class="nav-item" onclick="switchTab('repeat')">
+            <span class="nav-icon">🔁</span>
+            <span>Repeater</span>
+        </button>
+    </div>
+
     <script>
-        // Connect to the Render Server automatically
         const socket = io();
-        
-        let currentPhase = null; // 'request' or 'response'
+        let currentPhase = null; 
         let currentId = null;
 
-        // --- SOCKET LISTENERS ---
+        // --- 1. SOCKET HANDLING (Interception) ---
 
-        // 1. Intercept Request
         socket.on('intercept_request', (data) => {
-            setupInterceptor('request', data);
+            handleTraffic('request', data);
         });
 
-        // 2. Intercept Response
         socket.on('intercept_response', (data) => {
-            setupInterceptor('response', data);
+            handleTraffic('response', data);
         });
 
-        function setupInterceptor(type, data) {
+        function handleTraffic(type, data) {
+            // Show notification dot
+            document.getElementById('badge-intercept').classList.add('visible');
+            
+            // Setup internal state
             currentPhase = type;
             currentId = data.id;
 
-            // Show UI
-            document.getElementById('empty-state').style.display = 'none';
-            document.getElementById('active-intercept').style.display = 'flex';
-            
-            // Alert user visually
-            const tabBtn = document.getElementById('tab-interceptor');
-            tabBtn.classList.add('alert');
-
-            // Populate Fields
+            // Update UI
+            document.getElementById('intercept-empty').style.display = 'none';
+            document.getElementById('intercept-active').style.display = 'flex';
             document.getElementById('int-id').innerText = data.id;
-            document.getElementById('edit-body').value = data.body || '';
+            document.getElementById('int-body').value = data.body || '';
 
             if (type === 'request') {
-                document.getElementById('int-type').className = 'badge req';
-                document.getElementById('int-type').innerText = 'OUTGOING REQUEST';
-                document.getElementById('req-fields').style.display = 'block';
-                document.getElementById('res-fields').style.display = 'none';
+                document.getElementById('int-badge').className = 'status-badge req';
+                document.getElementById('int-badge').innerText = 'Outgoing Request';
+                document.getElementById('int-meta-group').style.display = 'flex';
+                document.getElementById('int-status-group').style.display = 'none';
+                document.getElementById('btn-to-repeater').style.display = 'block'; // Can repeat requests
                 
-                document.getElementById('edit-url').value = data.url;
-                document.getElementById('edit-method').value = data.method;
+                document.getElementById('int-url').value = data.url;
+                document.getElementById('int-method').value = data.method;
             } else {
-                document.getElementById('int-type').className = 'badge res';
-                document.getElementById('int-type').innerText = 'INCOMING RESPONSE';
-                document.getElementById('req-fields').style.display = 'none';
-                document.getElementById('res-fields').style.display = 'block';
+                document.getElementById('int-badge').className = 'status-badge res';
+                document.getElementById('int-badge').innerText = 'Incoming Response';
+                document.getElementById('int-meta-group').style.display = 'none';
+                document.getElementById('int-status-group').style.display = 'flex';
+                document.getElementById('btn-to-repeater').style.display = 'none'; // Cannot repeat responses directly
                 
-                document.getElementById('edit-status').value = data.status;
+                document.getElementById('int-status').value = data.status;
             }
         }
 
-        // --- ACTIONS ---
+        // --- 2. INTERCEPTOR ACTIONS ---
 
-        function forwardAction() {
+        function forwardRequest() {
             if (!currentId) return;
 
-            const body = document.getElementById('edit-body').value;
+            const body = document.getElementById('int-body').value;
 
             if (currentPhase === 'request') {
-                const url = document.getElementById('edit-url').value;
-                const method = document.getElementById('edit-method').value;
-                socket.emit('forward_request', { id: currentId, url, method, body });
+                socket.emit('forward_request', {
+                    id: currentId,
+                    url: document.getElementById('int-url').value,
+                    method: document.getElementById('int-method').value,
+                    body: body
+                });
             } else {
-                const status = document.getElementById('edit-status').value;
-                socket.emit('forward_response', { id: currentId, status, body });
-                
-                // If we forwarded a response, the cycle is done. Go back to browser.
-                switchTab('browser');
+                socket.emit('forward_response', {
+                    id: currentId,
+                    status: document.getElementById('int-status').value,
+                    body: body
+                });
+                // Done with this cycle
+                clearInterceptUI();
             }
-
-            resetInterceptor();
+            
+            // Clear UI immediately but don't force switch tab (stay context aware)
+            clearInterceptUI();
         }
 
-        function dropAction() {
-            // Simply hide UI for this demo
-            resetInterceptor();
-            switchTab('browser');
+        function dropRequest() {
+            clearInterceptUI();
+            // In a real app we would tell server to abort, here we just hide UI
         }
 
-        function resetInterceptor() {
-            document.getElementById('empty-state').style.display = 'block';
-            document.getElementById('active-intercept').style.display = 'none';
-            document.getElementById('tab-interceptor').classList.remove('alert');
+        function clearInterceptUI() {
+            document.getElementById('intercept-empty').style.display = 'flex';
+            document.getElementById('intercept-active').style.display = 'none';
+            document.getElementById('badge-intercept').classList.remove('visible');
             currentId = null;
         }
 
-        // --- NAVIGATION & TABS ---
+        // --- 3. REPEATER ACTIONS ---
+
+        function sendToRepeaterFromIntercept() {
+            // Copy data
+            document.getElementById('rep-url').value = document.getElementById('int-url').value;
+            document.getElementById('rep-method').value = document.getElementById('int-method').value;
+            document.getElementById('rep-body').value = document.getElementById('int-body').value;
+            
+            // Switch tab
+            switchTab('repeat');
+        }
+
+        async function executeRepeater() {
+            const btn = document.getElementById('btn-rep-send');
+            const out = document.getElementById('rep-response');
+            
+            btn.innerText = "Sending...";
+            btn.disabled = true;
+            out.innerText = "Waiting for server...";
+
+            const payload = {
+                url: document.getElementById('rep-url').value,
+                method: document.getElementById('rep-method').value,
+                body: document.getElementById('rep-body').value
+            };
+
+            try {
+                // We send this to OUR server to execute, avoiding CORS on client
+                const res = await fetch('/api/repeat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                out.innerText = \`STATUS: \${data.status}\\n\\n\${data.body}\`;
+            } catch (err) {
+                out.innerText = "Error: " + err.message;
+            }
+
+            btn.innerText = "Send Request";
+            btn.disabled = false;
+        }
+
+        function clearRepeater() {
+            document.getElementById('rep-url').value = '';
+            document.getElementById('rep-body').value = '';
+            document.getElementById('rep-response').innerText = 'No response yet...';
+        }
+
+        // --- 4. NAVIGATION ---
 
         function navigate() {
-            const url = document.getElementById('url-input').value;
-            // Point iframe to our server's proxy route
+            const url = document.getElementById('browser-url').value;
             document.getElementById('web-frame').src = '/proxy?url=' + encodeURIComponent(url);
         }
 
-        function switchTab(tab) {
+        function switchTab(name) {
             document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             
-            document.getElementById('view-' + tab).classList.add('active');
-            document.getElementById('tab-' + tab).classList.add('active');
-
-            if(tab === 'interceptor') {
-                document.getElementById('tab-interceptor').classList.remove('alert');
-            }
+            // Find index for button highlighting
+            const idx = name === 'browser' ? 0 : name === 'intercept' ? 1 : 2;
+            document.querySelectorAll('.nav-item')[idx].classList.add('active');
+            
+            document.getElementById('view-' + name).classList.add('active');
         }
     </script>
 </body>
 </html>
 `;
 
-// --- 2. BACKEND SERVER LOGIC ---
+// --- BACKEND LOGIC ---
 
-app.use(express.json());
+// 1. UI Route
+app.get('/', (req, res) => res.send(FRONTEND_UI));
 
-// Serve the UI
-app.get('/', (req, res) => {
-    res.send(FRONTEND_UI);
-});
-
-// The Main Proxy Engine
-app.get('/proxy', async (req, res) => {
-    const targetUrl = req.query.url;
-    if (!targetUrl) return res.send('No URL provided');
-
-    const reqId = Date.now().toString(); // Unique ID for this traffic
-    console.log(`[${reqId}] Traffic: ${targetUrl}`);
-
+// 2. Repeater API (Executes without intercepting)
+app.post('/api/repeat', async (req, res) => {
     try {
-        // --- PHASE 1: PAUSE OUTGOING REQUEST ---
-        io.emit('intercept_request', {
-            id: reqId,
-            url: targetUrl,
-            method: 'GET',
-            body: '' 
-        });
-
-        // Wait for user to click "Forward"
-        const modifiedReq = await waitForSignal(reqId, 'request');
-
-        // --- PHASE 2: EXECUTE REAL REQUEST ---
+        const { url, method, body } = req.body;
+        console.log(`[Repeater] ${method} ${url}`);
+        
         const response = await axios({
-            url: modifiedReq.url,
-            method: modifiedReq.method,
+            url, method,
+            data: body,
             headers: { 'User-Agent': 'Mozilla/5.0' },
-            validateStatus: () => true, // Don't throw error on 404
-            responseType: 'arraybuffer' // Get raw data
+            validateStatus: () => true,
+            responseType: 'arraybuffer'
         });
 
-        // Convert buffer to string
-        let bodyStr = response.data.toString('utf-8');
-
-        // --- PHASE 3: PAUSE INCOMING RESPONSE ---
-        io.emit('intercept_response', {
-            id: reqId,
+        res.json({
             status: response.status,
-            body: bodyStr
+            body: response.data.toString('utf-8')
         });
-
-        // Wait for user to click "Forward" again
-        const modifiedRes = await waitForSignal(reqId, 'response');
-
-        // --- PHASE 4: SEND TO BROWSER ---
-        // Inject <base> tag so images load correctly from the original site
-        let finalBody = modifiedRes.body;
-        if (finalBody.includes('<head>')) {
-            finalBody = finalBody.replace('<head>', `<head><base href="${modifiedReq.url}">`);
-        }
-
-        res.status(parseInt(modifiedRes.status)).send(finalBody);
-
     } catch (err) {
-        console.error(err);
-        res.status(500).send(`Proxy Error: ${err.message}`);
+        res.status(500).json({ status: 500, body: err.message });
     }
 });
 
-// Helper: Wraps socket events in a Promise
+// 3. Proxy Engine (With Interception)
+app.get('/proxy', async (req, res) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return res.send("No URL provided");
+    const reqId = Date.now().toString();
+
+    try {
+        // --- PHASE 1: OUTGOING REQUEST ---
+        io.emit('intercept_request', { id: reqId, url: targetUrl, method: 'GET', body: '' });
+        
+        // Wait for user edit...
+        const modReq = await waitForSignal(reqId, 'request');
+
+        // Execute Real Request
+        const response = await axios({
+            url: modReq.url,
+            method: modReq.method,
+            data: modReq.body,
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            validateStatus: () => true,
+            responseType: 'arraybuffer'
+        });
+        const bodyStr = response.data.toString('utf-8');
+
+        // --- PHASE 2: INCOMING RESPONSE ---
+        io.emit('intercept_response', { id: reqId, status: response.status, body: bodyStr });
+
+        // Wait for user edit...
+        const modRes = await waitForSignal(reqId, 'response');
+
+        // Send to Browser
+        let final = modRes.body;
+        if(final.includes('<head>')) final = final.replace('<head>', `<head><base href="${modReq.url}">`);
+        
+        res.status(parseInt(modRes.status)).send(final);
+
+    } catch (err) {
+        res.send(`Proxy Error: ${err.message}`);
+    }
+});
+
 function waitForSignal(id, type) {
     return new Promise((resolve, reject) => {
         pendingInterceptions[`${id}_${type}`] = resolve;
-
-        // Timeout after 60 seconds
         setTimeout(() => {
-            if (pendingInterceptions[`${id}_${type}`]) {
+            if(pendingInterceptions[`${id}_${type}`]) {
                 delete pendingInterceptions[`${id}_${type}`];
-                reject(new Error("Interceptor Timeout"));
+                reject(new Error("Timeout"));
             }
         }, 60000);
     });
 }
 
-// Socket Event Handling
 io.on('connection', (socket) => {
     socket.on('forward_request', (data) => {
         const key = `${data.id}_request`;
-        if (pendingInterceptions[key]) {
+        if(pendingInterceptions[key]) {
             pendingInterceptions[key](data);
             delete pendingInterceptions[key];
         }
     });
-
     socket.on('forward_response', (data) => {
         const key = `${data.id}_response`;
-        if (pendingInterceptions[key]) {
+        if(pendingInterceptions[key]) {
             pendingInterceptions[key](data);
             delete pendingInterceptions[key];
         }
     });
 });
 
-// Start Server
-server.listen(PORT, () => {
-    console.log(`\n🔥 Server is live on PORT: ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
