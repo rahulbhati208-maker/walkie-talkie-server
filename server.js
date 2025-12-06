@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
-const WebSocket = require('ws'); // For handling raw socket frames
+const WebSocket = require('ws');
 const axios = require('axios');
 const querystring = require('querystring');
 const url = require('url');
@@ -10,13 +10,28 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 10000;
 
-// 1. Control Channel (UI <-> Server)
+// 1. Control Channel (Socket.io)
+// Socket.io automatically attaches its own 'upgrade' listener to handle /socket.io/ paths
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// 2. WebSocket Proxy Server (Browser <-> Proxy <-> Target)
-const wss = new WebSocket.Server({ server });
+// 2. WebSocket Proxy (WS Library)
+// FIX: We use { noServer: true } so it doesn't fight with Socket.io
+const wss = new WebSocket.Server({ noServer: true });
+
+// 3. Manual Upgrade Routing
+// We listen for the upgrade event and only pass it to 'ws' if the path matches /proxy-socket
+server.on('upgrade', (request, socket, head) => {
+    const parsedUrl = url.parse(request.url);
+
+    if (parsedUrl.pathname === '/proxy-socket') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    }
+    // If the path is /socket.io/, the Socket.io library handles it automatically via its own listener
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -25,12 +40,9 @@ const pendingInterceptions = {};
 
 // --- WEBSOCKET PROXY LOGIC ---
 wss.on('connection', (clientWs, req) => {
-    // Only handle connections to our specific proxy path
-    // Url format: /proxy-socket?target=wss://example.com
     const parsedUrl = url.parse(req.url, true);
-    if (parsedUrl.pathname !== '/proxy-socket') return;
-
     const targetUrl = parsedUrl.query.target;
+    
     if (!targetUrl) {
         clientWs.close();
         return;
@@ -40,80 +52,49 @@ wss.on('connection', (clientWs, req) => {
 
     // Connect to the REAL target
     const targetWs = new WebSocket(targetUrl);
-    const socketId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-
-    // Queue to hold messages while target connects
     const messageQueue = [];
 
     targetWs.on('open', () => {
-        // Send queued messages
         while (messageQueue.length > 0) {
             targetWs.send(messageQueue.shift());
         }
     });
 
-    // --- INTERCEPT CLIENT -> TARGET (UPSTREAM) ---
+    // CLIENT -> TARGET
     clientWs.on('message', async (data, isBinary) => {
         const frameId = `ws_up_${Date.now()}`;
         const msgContent = isBinary ? data.toString('hex') : data.toString();
 
-        // 1. Pause & Notify UI
         io.emit('intercept_request', { 
-            id: frameId, 
-            url: targetUrl, 
-            method: 'WS-SEND', 
-            body: msgContent,
-            isSocket: true
+            id: frameId, url: targetUrl, method: 'WS-SEND', body: msgContent, isSocket: true
         });
 
         try {
-            // 2. Wait for User Edit
             const modified = await waitForSignal(frameId, 'request');
-            
-            // 3. Send to Real Target
-            // (If user edited it, we send the new content)
-            if (targetWs.readyState === WebSocket.OPEN) {
-                targetWs.send(modified.body);
-            } else {
-                messageQueue.push(modified.body);
-            }
-        } catch (e) {
-            console.log("WS Frame Dropped");
-        }
+            if (targetWs.readyState === WebSocket.OPEN) targetWs.send(modified.body);
+            else messageQueue.push(modified.body);
+        } catch (e) { console.log("WS Frame Dropped/Timeout"); }
     });
 
-    // --- INTERCEPT TARGET -> CLIENT (DOWNSTREAM) ---
+    // TARGET -> CLIENT
     targetWs.on('message', async (data, isBinary) => {
         const frameId = `ws_down_${Date.now()}`;
         const msgContent = isBinary ? data.toString('hex') : data.toString();
 
-        // 1. Pause & Notify UI
         io.emit('intercept_response', { 
-            id: frameId, 
-            status: 'WS-MSG', 
-            body: msgContent,
-            isSocket: true
+            id: frameId, status: 'WS-MSG', body: msgContent, isSocket: true
         });
 
         try {
-            // 2. Wait for User Edit
             const modified = await waitForSignal(frameId, 'response');
-            
-            // 3. Send to Browser
-            if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(modified.body);
-            }
-        } catch (e) {
-            console.log("WS Frame Dropped");
-        }
+            if (clientWs.readyState === WebSocket.OPEN) clientWs.send(modified.body);
+        } catch (e) { console.log("WS Frame Dropped/Timeout"); }
     });
 
-    // Cleanup
     clientWs.on('close', () => targetWs.close());
     targetWs.on('close', () => clientWs.close());
-    targetWs.on('error', (e) => console.error("Target WS Error", e));
+    targetWs.on('error', (e) => console.error("Target WS Error", e.message));
 });
-
 
 // --- FRONTEND UI ---
 const FRONTEND_UI = `
@@ -125,47 +106,25 @@ const FRONTEND_UI = `
     <title>Interceptor</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root { 
-            --bg: #121212; --card: #1e1e1e; --border: #333; 
-            --accent: #2196f3; --danger: #f44336; --success: #4caf50; --socket: #9c27b0;
-            --text: #e0e0e0; --nav-height: 45px; 
-        }
+        :root { --bg: #121212; --card: #1e1e1e; --border: #333; --accent: #2196f3; --danger: #f44336; --success: #4caf50; --socket: #9c27b0; --text: #e0e0e0; --nav-height: 45px; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { 
-            margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            background: var(--bg); color: var(--text); 
-            display: flex; flex-direction: column; height: 100dvh; overflow: hidden; 
-        }
-        .top-nav { 
-            height: var(--nav-height); background: #1a1a1a; border-bottom: 1px solid var(--border); 
-            display: flex; justify-content: space-around; align-items: center; flex-shrink: 0; z-index: 999;
-        }
-        .nav-item { 
-            flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; 
-            color: #888; font-size: 13px; font-weight: 600; background: none; border: none; 
-            border-bottom: 2px solid transparent; cursor: pointer; position: relative;
-        }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+        .top-nav { height: var(--nav-height); background: #1a1a1a; border-bottom: 1px solid var(--border); display: flex; justify-content: space-around; align-items: center; flex-shrink: 0; z-index: 999; }
+        .nav-item { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; color: #888; font-size: 13px; font-weight: 600; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; position: relative; }
         .nav-item.active { color: var(--accent); border-bottom-color: var(--accent); }
-        .badge-dot { 
-            position: absolute; top: 10px; right: 20%; width: 8px; height: 8px; 
-            background: var(--danger); border-radius: 50%; display: none; 
-        }
+        .badge-dot { position: absolute; top: 10px; right: 20%; width: 8px; height: 8px; background: var(--danger); border-radius: 50%; display: none; }
         .badge-dot.visible { display: block; }
-
         .viewport { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; }
         .view { display: none; height: 100%; flex-direction: column; width: 100%; }
         .view.active { display: flex; }
-
         .url-bar { padding: 8px; background: var(--card); display: flex; gap: 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
         .url-input { flex: 1; background: #2d2d2d; border: 1px solid #444; color: white; padding: 6px 10px; border-radius: 4px; outline: none; }
         .mode-select { background: #333; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px; font-size: 12px; }
         .btn-go { background: var(--success); color: white; border: none; padding: 0 12px; border-radius: 4px; font-weight: bold; }
-        
         #frame-container { flex: 1; width: 100%; height: 100%; overflow: hidden; position: relative; }
         iframe { width: 100%; height: 100%; border: none; background: white; }
         .pc-mode { overflow-x: auto !important; }
         .pc-mode iframe { width: 1024px !important; min-width: 1024px; }
-
         .interceptor-view { padding: 10px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .req-card { background: var(--card); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); height: 100%; overflow: hidden; }
         .card-header { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
@@ -177,7 +136,6 @@ const FRONTEND_UI = `
         .btn { flex: 1; padding: 12px; border: none; border-radius: 4px; font-weight: bold; color: white; font-size: 13px; }
         .btn-fwd { background: var(--success); }
         .btn-drop { background: var(--danger); }
-        
         .repeater-view { padding: 10px; display: flex; flex-direction: column; gap: 8px; height: 100%; overflow: hidden; }
         #rep-response { white-space: pre-wrap; }
     </style>
@@ -270,17 +228,13 @@ const FRONTEND_UI = `
 
             const badge = document.getElementById('int-badge');
             
-            // Check if it is a WebSocket Frame
             if (data.isSocket) {
-                badge.innerText = type === 'request' ? 'SOCKET OUT (UP)' : 'SOCKET IN (DOWN)';
-                badge.style.color = '#9c27b0'; // Purple for Sockets
-                
-                // For sockets, URL/Method are less relevant, but we show target
+                badge.innerText = type === 'request' ? 'SOCKET OUT' : 'SOCKET IN';
+                badge.style.color = '#9c27b0';
                 document.getElementById('int-meta-group').style.display = 'none';
                 document.getElementById('int-status-group').style.display = 'block';
                 document.getElementById('int-status').value = type === 'request' ? 'WS -> SERVER' : 'WS -> CLIENT';
-                
-                document.getElementById('btn-to-rep').style.display = 'none'; // Can't "Repeat" a socket frame easily via HTTP repeater
+                document.getElementById('btn-to-rep').style.display = 'none';
             } 
             else if (type === 'request') {
                 badge.innerText = 'OUTGOING HTTP';
@@ -382,7 +336,6 @@ const FRONTEND_UI = `
 </html>
 `;
 
-// --- BACKEND LOGIC ---
 app.get('/', (req, res) => res.send(FRONTEND_UI));
 
 app.post('/api/repeat', async (req, res) => {
@@ -410,7 +363,6 @@ app.all('/proxy', async (req, res) => {
     const reqId = Date.now().toString();
 
     try {
-        // HTTP REQUEST PHASE
         io.emit('intercept_request', { 
             id: reqId, url: targetUrl, method: req.method, body: req.body 
         });
@@ -431,12 +383,10 @@ app.all('/proxy', async (req, res) => {
             validateStatus: () => true, responseType: 'arraybuffer'
         });
 
-        // HTTP RESPONSE PHASE
         let bodyStr = response.data.toString('utf-8');
         io.emit('intercept_response', { id: reqId, status: response.status, body: bodyStr });
         const modRes = await waitForSignal(reqId, 'response');
 
-        // INJECTION & RESPONSE
         let finalBody = modRes.body;
         res.removeHeader("Content-Security-Policy");
         res.removeHeader("X-Frame-Options");
@@ -447,7 +397,6 @@ app.all('/proxy', async (req, res) => {
                 const CURRENT_MODE = '${viewMode}';
                 const PROXY_BASE = window.location.origin + '/proxy?mode=' + CURRENT_MODE + '&url=';
                 
-                // 1. WebSocket Injection
                 const OriginalWS = window.WebSocket;
                 window.WebSocket = class extends OriginalWS {
                     constructor(url, protocols) {
@@ -457,7 +406,6 @@ app.all('/proxy', async (req, res) => {
                     }
                 };
 
-                // 2. Link Injection
                 document.addEventListener('click', function(e) {
                     const anchor = e.target.closest('a');
                     if (anchor && anchor.href && !anchor.href.startsWith('javascript:')) {
@@ -466,7 +414,6 @@ app.all('/proxy', async (req, res) => {
                     }
                 });
                 
-                // 3. Form Injection
                 document.addEventListener('submit', function(e) {
                     e.preventDefault();
                     const form = e.target;
@@ -501,7 +448,6 @@ app.all('/proxy', async (req, res) => {
         } else {
             finalBody = scriptInjection + finalBody;
         }
-
         res.status(parseInt(modRes.status)).send(finalBody);
 
     } catch (err) { res.send(`Proxy Error: ${err.message}`); }
