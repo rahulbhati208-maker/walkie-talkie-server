@@ -1,125 +1,135 @@
 const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
-
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*", // Allow all origins for iframe
-    methods: ["GET", "POST"]
-  }
+
+// Simple in-memory store
+let visitorCount = 0;
+const visitors = new Map();
+
+// Allow CORS
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    next();
 });
 
-// Store connected users
-let connectedUsers = new Map();
-let stats = {
-  totalToday: 0,
-  peakCount: 0,
-  uniqueCount: 0,
-  uniqueVisitors: new Set()
-};
-
-// Main counter page - will be loaded in iframe
+// Main page (for iframe)
 app.get('/', (req, res) => {
-  res.send(`
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <style>
-      body { margin: 0; padding: 0; background: transparent; }
-      #counter { 
-        display: none; /* Hidden in iframe */
-      }
-    </style>
-  </head>
-  <body>
-    <div id="counter">0</div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-      const socket = io();
-      const visitorId = localStorage.getItem('visitorId') || 'visitor_' + Date.now();
-      
-      if (!localStorage.getItem('visitorId')) {
-        localStorage.setItem('visitorId', visitorId);
-      }
-      
-      socket.emit('join', { 
-        id: visitorId,
-        referer: document.referrer,
-        userAgent: navigator.userAgent
-      });
-      
-      socket.on('updateCount', (count) => {
-        document.getElementById('counter').textContent = count;
-        // Send to parent window
-        window.parent.postMessage({ type: 'visitorCount', count: count }, '*');
-      });
-      
-      window.addEventListener('beforeunload', () => {
-        socket.emit('leave', visitorId);
-      });
-    </script>
-  </body>
-  </html>
-  `);
+    const visitorId = req.query.id || `visitor_${Date.now()}_${Math.random()}`;
+    
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Counter</title>
+        <script>
+            // Send visitor count to parent
+            function updateParent(count) {
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({
+                        type: 'visitorCount',
+                        count: count
+                    }, '*');
+                }
+            }
+            
+            // Poll server for count
+            async function getCount() {
+                try {
+                    const response = await fetch('/count');
+                    const data = await response.json();
+                    updateParent(data.count);
+                    
+                    // Register this visitor
+                    await fetch('/visit?id=${visitorId}');
+                } catch (error) {
+                    console.log('Counter offline');
+                }
+            }
+            
+            // Initial load
+            getCount();
+            
+            // Update every 10 seconds
+            setInterval(getCount, 10000);
+            
+            // Clean up on page unload
+            window.addEventListener('beforeunload', () => {
+                fetch('/leave?id=${visitorId}', { method: 'POST' });
+            });
+        </script>
+    </head>
+    <body style="margin:0;padding:0;">
+        <!-- Empty page for iframe -->
+    </body>
+    </html>
+    `);
 });
 
-// API endpoint to get count (for direct AJAX calls)
-app.get('/api/count', (req, res) => {
-  res.json({
-    count: connectedUsers.size,
-    stats: {
-      totalToday: stats.totalToday,
-      peakCount: stats.peakCount,
-      uniqueCount: stats.uniqueCount
+// API: Register visit
+app.get('/visit', (req, res) => {
+    const id = req.query.id;
+    if (id) {
+        visitors.set(id, Date.now());
+        visitorCount = visitors.size;
     }
-  });
+    res.json({ success: true });
 });
 
-// Socket.io handling
-io.on('connection', (socket) => {
-  socket.on('join', (userData) => {
-    connectedUsers.set(socket.id, {
-      ...userData,
-      socketId: socket.id,
-      joinTime: new Date().toISOString()
+// API: Remove visitor
+app.post('/leave', (req, res) => {
+    const id = req.query.id;
+    if (id && visitors.has(id)) {
+        visitors.delete(id);
+        visitorCount = visitors.size;
+    }
+    res.json({ success: true });
+});
+
+// API: Get current count
+app.get('/count', (req, res) => {
+    // Clean up old visitors (30 seconds timeout)
+    const now = Date.now();
+    for (const [id, timestamp] of visitors.entries()) {
+        if (now - timestamp > 30000) { // 30 seconds
+            visitors.delete(id);
+        }
+    }
+    visitorCount = visitors.size;
+    
+    res.json({ 
+        count: visitorCount,
+        timestamp: new Date().toISOString()
     });
-    
-    // Update stats
-    stats.totalToday++;
-    stats.uniqueVisitors.add(userData.id);
-    stats.uniqueCount = stats.uniqueVisitors.size;
-    
-    if (connectedUsers.size > stats.peakCount) {
-      stats.peakCount = connectedUsers.size;
-    }
-    
-    // Broadcast new count to all
-    broadcastCount();
-  });
-  
-  socket.on('leave', () => {
-    connectedUsers.delete(socket.id);
-    broadcastCount();
-  });
-  
-  socket.on('disconnect', () => {
-    connectedUsers.delete(socket.id);
-    broadcastCount();
-  });
 });
 
-function broadcastCount() {
-  io.emit('updateCount', connectedUsers.size);
-}
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        count: visitorCount,
+        uptime: process.uptime()
+    });
+});
 
-// Clean inactive users every 30 seconds
+// Clean up old visitors every 20 seconds
 setInterval(() => {
-  broadcastCount();
-}, 30000);
+    const now = Date.now();
+    for (const [id, timestamp] of visitors.entries()) {
+        if (now - timestamp > 30000) { // 30 seconds
+            visitors.delete(id);
+        }
+    }
+    visitorCount = visitors.size;
+}, 20000);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Visitor counter running on http://localhost:${PORT}`);
+    console.log(`✅ Visitor counter server running on http://localhost:${PORT}`);
+    console.log(`📊 API endpoints:`);
+    console.log(`   http://localhost:${PORT}/count - Get current count`);
+    console.log(`   http://localhost:${PORT}/health - Health check`);
 });
