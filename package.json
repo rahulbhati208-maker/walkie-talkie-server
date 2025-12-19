@@ -1,5 +1,5 @@
 {
-  "name": "live-page-chat",
+  "name": "live-audio-chat",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -7,8 +7,6 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "socket.io": "^4.7.2",
-    "mysql2": "^3.6.0",
-    "dotenv": "^16.3.1"
+    "socket.io": "^4.7.2"
   }
 }
