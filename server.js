@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const dbOptions = { host: '37.27.71.198', user: 'ngyesawv_user'', password: 'rahulB123@', database: 'ngyesawv_chatx' };
+const dbOptions = { host: '37.27.71.198', user: 'ngyesawv_user', password: 'rahulB123@', database: 'ngyesawv_chatx' };
 const pool = mysql.createPool(dbOptions);
 const sessionStore = new MySQLStore(dbOptions);
 
