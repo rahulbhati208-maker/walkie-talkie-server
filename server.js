@@ -14,98 +14,74 @@ const pool = mysql.createPool({
     user: 'ngyesawv_user', 
     password: 'rahulB123@', 
     database: 'ngyesawv_mock',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
+  const express = require('express');
+const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
+const multer = require('multer');
+const http = require('http');
+const { Server } = require('socket.io');
 
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 
+// DB Connection
+const dbOptions = {
+    host: '37.27.71.198', 
+    user: 'ngyesawv_user', 
+    password: 'rahulB123@', 
+    database: 'ngyesawv_mock'
+};
+const pool = mysql.createPool(dbOptions);
+const sessionStore = new MySQLStore(dbOptions);
+
+app.use(express.urlencoded({ extended: true }));
+app.use(session({
+    key: 'user_sid',
+    secret: 'whatsapp_secret',
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // 30 Days
+}));
+
+// --- Registration Logic ---
+app.post('/register', async (req, res) => {
+    const { phone, password, name } = req.body;
+    const hashed = await bcrypt.hash(password, 10);
+    try {
+        await pool.query('INSERT INTO users (phone, password, profile_name) VALUES (?, ?, ?)', [phone, hashed, name]);
+        res.send("Registration successful. Wait for Admin approval.");
+    } catch (e) { res.status(500).send("User already exists"); }
 });
 
-// --- UI (Single Page) ---
-const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Live Page Chat</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: -apple-system, sans-serif; margin: 0; background: #e5ddd5; display: flex; flex-direction: column; height: 100vh; }
-        header { background: #075e54; color: white; padding: 15px; text-align: center; font-weight: bold; }
-        #chat-box { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 8px; }
-        .msg { background: white; padding: 8px 12px; border-radius: 8px; max-width: 80%; width: fit-content; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-        .input-area { background: #f0f0f0; padding: 10px; display: flex; gap: 8px; }
-        input { flex: 1; padding: 12px; border-radius: 20px; border: 1px solid #ddd; outline: none; }
-        button { background: #075e54; color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <header>Room: <span id="room-name"></span></header>
-    <div id="chat-box"></div>
-    <div class="input-area">
-        <input type="text" id="msg-input" placeholder="Type a message..." autocomplete="off">
-        <button onclick="send()">Send</button>
-    </div>
+// --- Login Logic ---
+app.post('/login', async (req, res) => {
+    const { phone, password } = req.body;
+    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+    if (users.length && await bcrypt.compare(password, users[0].password)) {
+        if (users[0].is_approved) {
+            req.session.userId = users[0].id;
+            res.redirect('/chat');
+        } else { res.send("Account pending admin approval."); }
+    } else { res.send("Invalid credentials."); }
+});
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        const room = window.location.pathname;
-        document.getElementById('room-name').innerText = room;
-
-        socket.emit('join', room);
-
-        // Load old messages from DB
-        socket.on('load-history', (msgs) => {
-            msgs.forEach(m => appendMsg(m.content));
-        });
-
-        socket.on('message', (txt) => appendMsg(txt));
-
-        function appendMsg(text) {
-            const box = document.getElementById('chat-box');
-            const div = document.createElement('div');
-            div.className = 'msg';
-            div.textContent = text;
-            box.appendChild(div);
-            box.scrollTop = box.scrollHeight;
-        }
-
-        function send() {
-            const input = document.getElementById('msg-input');
-            if(input.value.trim()) {
-                socket.emit('chat', { room, text: input.value });
-                input.value = '';
-            }
-        }
-
-        document.getElementById('msg-input').addEventListener('keypress', e => {
-            if(e.key === 'Enter') send();
-        });
-    </script>
-</body>
-</html>
-`;
-
-app.get('*', (req, res) => res.send(htmlContent));
-
-// --- SOCKET LOGIC ---
+// --- Socket.io for Real-time WhatsApp Style ---
 io.on('connection', (socket) => {
-    socket.on('join', (room) => {
-        socket.join(room);
-        
-        // Fetch last 50 messages for this specific URL
-        pool.query('SELECT content FROM messages WHERE room = ? ORDER BY id ASC LIMIT 50', [room], (err, results) => {
-            if (!err) socket.emit('load-history', results);
-        });
-    });
+    socket.on('join-private', (userId) => socket.join(`user_${userId}`));
 
-    socket.on('chat', (data) => {
-        // Save message to Razorhost DB
-        pool.query('INSERT INTO messages (room, content) VALUES (?, ?)', [data.room, data.text], (err) => {
-            if (err) console.error("DB Error:", err);
-        });
-        // Send to everyone in the room
-        io.to(data.room).emit('message', data.text);
+    socket.on('send-direct-msg', async (data) => {
+        // data = { senderId, receiverPhone, text }
+        const [target] = await pool.query('SELECT id FROM users WHERE phone = ?', [data.receiverPhone]);
+        if (target.length) {
+            await pool.query('INSERT INTO direct_messages (sender_id, receiver_id, message) VALUES (?, ?, ?)', 
+            [data.senderId, target[0].id, data.text]);
+            
+            io.to(`user_${target[0].id}`).emit('new-msg', { from: data.senderId, text: data.text });
+        }
     });
 });
 
