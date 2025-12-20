@@ -9,10 +9,14 @@
         :root { --wa-bg: #efe7dd; --wa-teal: #075e54; --my-msg: #dcf8c6; --received-msg: #ffffff; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body, html { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; font-family: -apple-system, sans-serif; background: #000; }
+
         .app-shell { width: 100%; height: 100%; display: flex; position: relative; background: #fff; }
         
-        #sidebar { width: 30%; min-width: 320px; height: 100%; border-right: 1px solid #ddd; display: flex; flex-direction: column; background: #fff; z-index: 10; transition: transform 0.3s; }
-        #chat-main { flex: 1; height: 100%; display: flex; flex-direction: column; background: var(--wa-bg); background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); transition: transform 0.3s; }
+        /* Sidebar Animations */
+        #sidebar { width: 30%; min-width: 320px; height: 100%; border-right: 1px solid #ddd; display: flex; flex-direction: column; background: #fff; z-index: 10; transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        /* Main Chat Area Animations */
+        #chat-main { flex: 1; height: 100%; display: flex; flex-direction: column; background: var(--wa-bg); background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
         
         @media (max-width: 768px) { 
             #sidebar { width: 100%; position: absolute; } 
@@ -22,158 +26,160 @@
         }
 
         .header { height: 60px; background: var(--wa-teal); color: white; display: flex; align-items: center; padding: 0 15px; position: relative; }
-        .status-sub { font-size: 11px; color: #dcf8c6; display: block; }
         
-        #chat-window { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; }
-        .date-divider { align-self: center; background: #d1e4f4; padding: 4px 12px; border-radius: 6px; font-size: 11px; margin: 15px 0; color: #555; }
+        /* Message Bubbles with Slide-in Animation */
+        #chat-window { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 5px; }
+        .msg { position: relative; padding: 8px 12px; border-radius: 10px; max-width: 75%; font-size: 15px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); animation: msgSlide 0.3s ease-out; cursor: pointer; }
+        @keyframes msgSlide { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* 2. MESSAGE SPACING FIX */
-        .msg { position: relative; padding: 8px 12px; border-radius: 10px; margin-bottom: 5px; max-width: 75%; font-size: 15px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); word-wrap: break-word; }
         .sent { align-self: flex-end; background: var(--my-msg); border-top-right-radius: 0; }
         .received { align-self: flex-start; background: var(--received-msg); border-top-left-radius: 0; }
         
-        .msg-footer { font-size: 10px; color: #888; display: inline-flex; align-items: center; gap: 4px; float: right; margin-top: 5px; }
-        .tick-blue { color: #34b7f1; font-weight: bold; }
+        .reply-box { background: rgba(0,0,0,0.05); padding: 5px; border-left: 3px solid var(--wa-teal); margin-bottom: 5px; font-size: 12px; border-radius: 4px; }
+        .msg-footer { font-size: 10px; color: #888; display: inline-flex; align-items: center; float: right; margin-top: 5px; }
+
+        /* Reply Input UI */
+        #reply-indicator { display: none; background: #eee; padding: 10px; border-left: 5px solid var(--wa-teal); position: relative; animation: slideUp 0.2s; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
         #input-area { background: #f0f0f0; padding: 10px; display: flex; align-items: center; gap: 10px; border-top: 1px solid #ddd; }
         #msg-input { flex: 1; border: none; border-radius: 20px; padding: 10px 15px; outline: none; }
-        .send-btn { background: var(--wa-teal); color: white; border: none; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
-        
-        .contact-item { padding: 12px 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; align-items: center; gap: 10px; }
-        .badge { background: #25d366; color: white; border-radius: 50%; padding: 2px 7px; font-size: 11px; font-weight: bold; }
-        #date-filter { display:none; position:absolute; top:60px; right:10px; background:white; padding:10px; box-shadow:0 2px 10px rgba(0,0,0,0.2); border-radius:8px; z-index:100; color:#333; }
     </style>
 </head>
 <body>
+
 <div class="app-shell">
     <div id="sidebar">
-        <div class="header"><strong>Chat X</strong> <button onclick="toggleSearch()" style="margin-left:auto; background:none; border:none; color:white; font-size:22px;">+</button></div>
-        <div id="search-box" style="display:none; padding:10px;"><input type="text" id="target-phone" placeholder="Enter Phone Number..." onkeypress="handleAdd(event)" style="width:100%; padding:10px; border-radius:5px; border:1px solid #ddd;"></div>
+        <div class="header"><strong>Chat X</strong></div>
         <div id="contact-list" style="overflow-y:auto; flex:1;"></div>
     </div>
     <div id="chat-main">
         <div class="header">
             <span onclick="goBack()" style="margin-right:15px; cursor:pointer; font-size:22px;">←</span>
-            <div><strong id="chat-title">Select Contact</strong><span id="chat-status" class="status-sub"></span></div>
-            <button onclick="document.getElementById('date-filter').style.display='block'" style="margin-left:auto; background:none; border:none; color:white; font-size:20px;">📅</button>
-            <div id="date-filter">
-                <input type="date" id="df-from"><input type="date" id="df-to">
-                <button onclick="applyFilter()" style="background:var(--wa-teal); color:white; border:none; padding:5px; width:100%; margin-top:5px;">Filter</button>
-            </div>
+            <div><strong id="chat-title">Select Contact</strong><span id="chat-status" style="font-size:11px; display:block;"></span></div>
         </div>
         <div id="chat-window"></div>
+        
+        <div id="reply-indicator">
+            <div id="reply-text" style="font-size:12px; color: #555;"></div>
+            <span onclick="cancelReply()" style="position:absolute; right:10px; top:5px; cursor:pointer;">×</span>
+        </div>
+
         <div id="input-area">
             <input type="text" id="msg-input" placeholder="Type a message..." oninput="handleTyping()">
-            <button class="send-btn" onclick="sendMsg()">➤</button>
+            <button onclick="sendMsg()" style="background:var(--wa-teal); color:white; border:none; width:40px; height:40px; border-radius:50%; cursor:pointer;">➤</button>
         </div>
     </div>
 </div>
-<audio id="snd-recv" src="https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3"></audio>
-<audio id="snd-sent" src="https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3"></audio>
 
-<script>
+<audio id="snd-loud" src="https://assets.mixkit.co/active_storage/sfx/951/951-preview.mp3"></audio> <script>
     const socket = io();
     let activeChatId = null;
-    let typingTimer; // For fixing the stuck typing indicator
-    const sndRecv = document.getElementById('snd-recv');
-    const sndSent = document.getElementById('snd-sent');
+    let replyToId = null;
+    let chatCache = {}; // GLOBAL CACHE for Instant Loading
+    const loudSound = document.getElementById('snd-loud');
 
-    function toggleSearch() { const s = document.getElementById('search-box'); s.style.display = s.style.display==='block' ? 'none' : 'block'; }
-    function goBack() { document.body.classList.remove('view-chat'); }
-
-    // --- TYPING LOGIC FIX ---
-    function handleTyping() {
-        if(!activeChatId) return;
-        socket.emit('typing', { toId: activeChatId });
+    // 1. PRE-FETCH EVERYTHING ON LOGIN
+    async function prefetchData() {
+        const res = await fetch('/my-contacts');
+        const contacts = await res.json();
+        renderContacts(contacts);
         
-        clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => {
-            socket.emit('stop-typing', { toId: activeChatId });
-        }, 3000); // Automatically send "stop-typing" after 3 seconds of no keypress
+        // Background load all messages
+        contacts.forEach(async (c) => {
+            const mRes = await fetch(`/messages/${c.id}`);
+            const data = await mRes.json();
+            chatCache[c.id] = data.messages;
+        });
     }
 
-    async function applyFilter() {
-        const from = document.getElementById('df-from').value;
-        const to = document.getElementById('df-to').value;
-        const res = await fetch(`/messages/${activeChatId}?from=${from}&to=${to}`);
-        const data = await res.json();
-        renderMessages(data.messages);
-        document.getElementById('date-filter').style.display = 'none';
+    function renderContacts(contacts) {
+        const list = document.getElementById('contact-list');
+        list.innerHTML = contacts.map(c => `
+            <div onclick="openChat(${c.id}, '${c.profile_name}')" style="padding:15px; border-bottom:1px solid #eee; cursor:pointer;">
+                <strong>${c.profile_name}</strong>
+            </div>
+        `).join('');
     }
 
-    async function handleAdd(e) {
-        if(e.key === 'Enter') {
-            const res = await fetch('/add-contact', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone:e.target.value}) });
-            if(res.ok) { e.target.value=''; toggleSearch(); loadContacts(); }
-        }
-    }
-
-    async function selectChat(id, name) {
+    // 2. INSTANT CHAT OPENING
+    function openChat(id, name) {
         activeChatId = id;
         document.getElementById('chat-title').innerText = name;
         if(window.innerWidth <= 768) document.body.classList.add('view-chat');
-        const res = await fetch('/messages/' + id);
-        const data = await res.json();
-        renderMessages(data.messages);
-        loadContacts();
+        
+        const msgs = chatCache[id] || [];
+        renderMessages(msgs);
+        
+        // Fetch fresh in background to update unread status
+        fetch(`/messages/${id}`).then(r => r.json()).then(data => {
+            chatCache[id] = data.messages;
+            renderMessages(data.messages);
+        });
     }
 
     function renderMessages(msgs) {
-        const win = document.getElementById('chat-window'); win.innerHTML = '';
-        let lastDate = '';
+        const win = document.getElementById('chat-window');
+        win.innerHTML = '';
         msgs.forEach(m => {
-            const date = new Date(m.created_at).toLocaleDateString();
-            if(date !== lastDate) {
-                const div = document.createElement('div'); div.className = 'date-divider';
-                div.innerText = date === new Date().toLocaleDateString() ? "TODAY" : date;
-                win.appendChild(div); lastDate = date;
-            }
             const div = document.createElement('div');
-            div.className = 'msg ' + (m.sender_id != activeChatId ? 'sent' : 'received');
-            const time = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-            const status = m.status === 'read' ? '<span class="tick-blue">✓✓</span>' : '✓';
+            div.className = 'msg ' + (m.sender_id == activeChatId ? 'received' : 'sent');
             
-            // Added 3 non-breaking spaces (&nbsp;) for distance
-            div.innerHTML = `${m.message} <div class="msg-footer">&nbsp;&nbsp;&nbsp;${time} ${m.sender_id != activeChatId ? status : ''}</div>`;
+            // 3. FIX TIMEZONE: Convert UTC to Local Browser Time
+            const localTime = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            
+            let replyHtml = m.reply_text ? `<div class="reply-box">${m.reply_text}</div>` : '';
+            div.innerHTML = `${replyHtml}${m.message} <div class="msg-footer">&nbsp;&nbsp;&nbsp;${localTime}</div>`;
+            
+            // Swipe/Click to Reply logic
+            div.onclick = () => setReply(m.id, m.message);
             win.appendChild(div);
         });
         win.scrollTop = win.scrollHeight;
     }
 
+    function setReply(id, text) {
+        replyToId = id;
+        document.getElementById('reply-text').innerText = "Replying to: " + text;
+        document.getElementById('reply-indicator').style.display = 'block';
+        document.getElementById('msg-input').focus();
+    }
+
+    function cancelReply() {
+        replyToId = null;
+        document.getElementById('reply-indicator').style.display = 'none';
+    }
+
     function sendMsg() {
         const input = document.getElementById('msg-input');
         if(!activeChatId || !input.value) return;
-        socket.emit('send-message', { toId: activeChatId, text: input.value }, () => { 
-            sndSent.play(); 
-            selectChat(activeChatId, document.getElementById('chat-title').innerText); 
+        
+        socket.emit('send-message', { toId: activeChatId, text: input.value, replyTo: replyToId }, () => {
+            openChat(activeChatId, document.getElementById('chat-title').innerText);
+            cancelReply();
         });
         input.value = '';
-        socket.emit('stop-typing', { toId: activeChatId });
-    }
-
-    socket.on('is-typing', (d) => { if(d.fromId == activeChatId) document.getElementById('chat-status').innerText = 'typing...'; });
-    socket.on('not-typing', (d) => { if(d.fromId == activeChatId) document.getElementById('chat-status').innerText = ''; });
-
-    async function loadContacts() {
-        const res = await fetch('/my-contacts');
-        const data = await res.json();
-        const list = document.getElementById('contact-list');
-        list.innerHTML = data.map(c => `
-            <div class="contact-item" onclick="selectChat(${c.id}, '${c.profile_name}')">
-                <div style="flex:1"><strong>${c.profile_name}</strong><br><small style="color:#888">${c.last_msg || 'Start chatting'}</small></div>
-                <div style="text-align:right">
-                    <div style="font-size:10px; color:#999">${new Date(c.last_chat_time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
-                    ${c.unread_count > 0 ? `<span class="badge">${c.unread_count}</span>` : ''}
-                </div>
-            </div>
-        `).join('');
     }
 
     socket.on('receive-message', (data) => {
-        if(activeChatId == data.fromId) selectChat(activeChatId, document.getElementById('chat-title').innerText);
-        loadContacts(); sndRecv.play();
+        // 4. LOUD SOUND IF BACKGROUND
+        if (document.hidden) {
+            loudSound.volume = 1.0;
+            loudSound.play();
+        } else {
+            loudSound.volume = 0.4;
+            loudSound.play();
+        }
+
+        if(activeChatId == data.fromId) {
+            openChat(activeChatId, document.getElementById('chat-title').innerText);
+        } else {
+            prefetchData(); // Refresh sidebar/cache
+        }
     });
-    loadContacts();
+
+    function goBack() { document.body.classList.remove('view-chat'); }
+    prefetchData();
 </script>
 </body>
 </html>
