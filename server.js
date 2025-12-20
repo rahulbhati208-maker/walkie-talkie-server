@@ -26,7 +26,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static('public'));
 
-// Update Last Seen on every request
 app.use(async (req, res, next) => {
     if (req.session.userId) await pool.query('UPDATE users SET last_seen = NOW() WHERE id = ?', [req.session.userId]);
     next();
@@ -49,7 +48,6 @@ app.post('/login', async (req, res) => {
     } else res.send("Invalid login.");
 });
 
-// ADD USER
 app.post('/add-contact', async (req, res) => {
     const { phone } = req.body;
     const [target] = await pool.query('SELECT id FROM users WHERE phone = ?', [phone]);
@@ -59,7 +57,6 @@ app.post('/add-contact', async (req, res) => {
     } else res.status(404).send("Not found");
 });
 
-// GET CONTACTS (SORTED BY LATEST MESSAGE)
 app.get('/my-contacts', async (req, res) => {
     const myId = req.session.userId;
     const [contacts] = await pool.query(`
@@ -73,7 +70,6 @@ app.get('/my-contacts', async (req, res) => {
     res.json(contacts);
 });
 
-// GET MESSAGES WITH DATE FILTER
 app.get('/messages/:contactId', async (req, res) => {
     const myId = req.session.userId;
     const contactId = req.params.contactId;
