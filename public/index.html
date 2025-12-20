@@ -1,103 +1,356 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>WhatsApp Clone</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chat X</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; background: #e5ddd5; }
-        #sidebar { width: 300px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
-        #search-box { padding: 15px; background: #075e54; color: white; }
+        :root {
+            --wa-bg: #e5ddd5;
+            --wa-teal: #075e54;
+            --wa-light: #f0f2f5;
+            --my-msg: #dcf8c6;
+            --received-msg: #ffffff;
+            --sidebar-width: 350px;
+        }
+
+        * { box-sizing: border-box; }
+        body, html { margin: 0; height: 100%; font-family: -apple-system, sans-serif; overflow: hidden; }
+
+        /* SPA Layout Shell */
+        .app-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+            background: #f0f2f5;
+        }
+
+        /* Sidebar Section */
+        #sidebar {
+            width: var(--sidebar-width);
+            background: #fff;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            z-index: 2;
+        }
+
+        .side-header {
+            background: #ededed;
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .search-icon { cursor: pointer; font-size: 20px; color: #54656f; }
+
+        #search-container {
+            display: none;
+            padding: 10px;
+            background: #f6f6f6;
+            border-bottom: 1px solid #ddd;
+        }
+
+        #search-container input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            outline: none;
+        }
+
         #contact-list { flex: 1; overflow-y: auto; }
-        .contact-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; }
+
+        .contact-item {
+            padding: 12px 15px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #f2f2f2;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
         .contact-item:hover { background: #f5f5f5; }
-        
-        #chat-main { flex: 1; display: flex; flex-direction: column; }
-        #chat-header { padding: 15px; background: #eee; font-weight: bold; border-bottom: 1px solid #ccc; }
-        #chat-window { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
-        .msg { padding: 10px; border-radius: 8px; max-width: 70%; word-wrap: break-word; }
-        .sent { align-self: flex-end; background: #dcf8c6; }
-        .received { align-self: flex-start; background: white; }
-        
-        #input-area { padding: 15px; background: #f0f0f0; display: flex; gap: 10px; }
-        input[type="text"] { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; outline: none; }
-        button { padding: 10px 20px; background: #075e54; color: white; border: none; border-radius: 20px; cursor: pointer; }
+        .contact-item.active { background: #ebebeb; }
+
+        .contact-info { flex: 1; margin-left: 12px; }
+        .contact-info strong { display: block; font-size: 16px; color: #111; }
+        .contact-info small { color: #667781; }
+
+        .unread-badge {
+            background: #25d366;
+            color: white;
+            border-radius: 12px;
+            min-width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 0 6px;
+        }
+
+        /* Chat Main Section */
+        #chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--wa-bg);
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            position: relative;
+        }
+
+        #chat-header {
+            background: #ededed;
+            padding: 10px 16px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            font-weight: bold;
+            color: #111;
+        }
+
+        .back-btn { display: none; margin-right: 15px; cursor: pointer; font-size: 20px; }
+
+        /* Scrollable Chat Area */
+        #chat-window {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 5%;
+            display: flex;
+            flex-direction: column;
+            scroll-behavior: smooth;
+        }
+
+        /* Date Separator */
+        .date-divider {
+            align-self: center;
+            background: #ffffff;
+            padding: 5px 12px;
+            border-radius: 7px;
+            font-size: 12px;
+            margin: 15px 0;
+            box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+            color: #54656f;
+            text-transform: uppercase;
+        }
+
+        /* Bubbles */
+        .msg {
+            position: relative;
+            padding: 8px 10px;
+            border-radius: 8px;
+            max-width: 70%;
+            margin-bottom: 6px;
+            font-size: 15px;
+            box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .sent { align-self: flex-end; background: var(--my-msg); border-top-right-radius: 0; }
+        .received { align-self: flex-start; background: var(--received-msg); border-top-left-radius: 0; }
+
+        .timestamp {
+            font-size: 10px;
+            color: #667781;
+            margin-left: 10px;
+            float: right;
+            margin-top: 6px;
+        }
+
+        /* Fixed Bottom Entry Field */
+        #input-area {
+            background: #f0f2f5;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-top: 1px solid #ddd;
+        }
+
+        #msg-input {
+            flex: 1;
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: none;
+            outline: none;
+            font-size: 15px;
+            background: white;
+        }
+
+        .send-btn {
+            background: var(--wa-teal);
+            color: white;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        /* Mobile View Logic */
+        @media (max-width: 768px) {
+            #sidebar { width: 100%; }
+            #chat-main { 
+                display: none; 
+                position: fixed; 
+                top: 0; 
+                left: 0; 
+                width: 100%; 
+                height: 100%; 
+                z-index: 10;
+            }
+            .chat-open #chat-main { display: flex; }
+            .back-btn { display: block; }
+        }
     </style>
 </head>
-<body>
+<body class="">
 
-<div id="sidebar">
-    <div id="search-box">
-        <form action="/add-contact" method="POST">
-            <input type="text" name="phone" placeholder="Search phone number..." required style="width: 75%;">
-            <button type="submit">+</button>
-        </form>
+<div class="app-container">
+    <div id="sidebar">
+        <div class="side-header">
+            <strong style="font-size: 20px;">Chat X</strong>
+            <div class="search-icon" onclick="toggleSearch()">⊕</div>
+        </div>
+        <div id="search-container">
+            <form action="/add-contact" method="POST" style="display: flex; gap: 5px;">
+                <input type="text" name="phone" placeholder="Enter phone number..." required>
+                <button type="submit" style="display:none;"></button>
+            </form>
+        </div>
+        <div id="contact-list"></div>
     </div>
-    <div id="contact-list"></div>
+
+    <div id="chat-main">
+        <div id="chat-header">
+            <div class="back-btn" onclick="closeChat()">←</div>
+            <span id="active-user-name">Welcome to Chat X</span>
+        </div>
+        <div id="chat-window">
+            </div>
+        <div id="input-area">
+            <input type="text" id="msg-input" placeholder="Type a message..." autocomplete="off">
+            <button class="send-btn" onclick="sendMsg()">➤</button>
+        </div>
+    </div>
 </div>
 
-<div id="chat-main">
-    <div id="chat-header">Select a contact</div>
-    <div id="chat-window"></div>
-    <div id="input-area">
-        <input type="text" id="msg-input" placeholder="Type a message...">
-        <button onclick="send()">Send</button>
-    </div>
-</div>
-
-<script src="/socket.io/socket.io.js"></script>
 <script>
     const socket = io();
     let activeChatId = null;
-    let myId = null;
 
-    async function init() {
+    function toggleSearch() {
+        const el = document.getElementById('search-container');
+        el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+    }
+
+    function closeChat() {
+        document.body.classList.remove('chat-open');
+    }
+
+    async function loadContacts() {
         const res = await fetch('/my-contacts');
         const contacts = await res.json();
         const list = document.getElementById('contact-list');
         list.innerHTML = contacts.map(c => `
-            <div class="contact-item" onclick="selectChat(${c.id}, '${c.profile_name}')">
-                <strong>${c.profile_name}</strong><br><small>${c.phone}</small>
+            <div class="contact-item ${activeChatId == c.id ? 'active' : ''}" onclick="selectChat(${c.id}, '${c.profile_name}')">
+                <div class="contact-info">
+                    <strong>${c.profile_name}</strong>
+                    <small>${c.phone}</small>
+                </div>
+                ${c.unread_count > 0 ? `<div class="unread-badge">${c.unread_count}</div>` : ''}
             </div>
         `).join('');
     }
 
     async function selectChat(id, name) {
         activeChatId = id;
-        document.getElementById('chat-header').innerText = name;
-        document.getElementById('chat-window').innerHTML = "Loading...";
+        document.getElementById('active-user-name').innerText = name;
         
+        if (window.innerWidth <= 768) {
+            document.body.classList.add('chat-open');
+        }
+
+        // Fetch History
         const res = await fetch('/messages/' + id);
         const history = await res.json();
-        document.getElementById('chat-window').innerHTML = "";
-        history.forEach(m => appendMsg(m.message, m.sender_id != id));
+        renderMessages(history);
+        loadContacts(); // Update unread counts
     }
 
-    socket.on('receive-message', (data) => {
-        if (activeChatId == data.fromId) {
-            appendMsg(data.text, false);
-        } else {
-            alert("New message from another contact!");
-        }
-    });
+    function renderMessages(history) {
+        const win = document.getElementById('chat-window');
+        win.innerHTML = "";
+        let lastDateString = "";
 
-    function send() {
-        const text = document.getElementById('msg-input').value;
-        if (!activeChatId || !text) return;
-        socket.emit('send-message', { toId: activeChatId, text: text });
-        appendMsg(text, true);
-        document.getElementById('msg-input').value = "";
+        history.forEach(m => {
+            const mDate = new Date(m.created_at);
+            const dateString = mDate.toLocaleDateString();
+
+            if (dateString !== lastDateString) {
+                const divider = document.createElement('div');
+                divider.className = 'date-divider';
+                const today = new Date().toLocaleDateString();
+                divider.innerText = (dateString === today) ? "Today" : dateString;
+                win.appendChild(divider);
+                lastDateString = dateString;
+            }
+
+            appendMsgUI(m.message, m.sender_id != activeChatId, m.created_at);
+        });
     }
 
-    function appendMsg(text, isSent) {
+    function appendMsgUI(text, isSent, timestamp) {
         const win = document.getElementById('chat-window');
         const div = document.createElement('div');
         div.className = 'msg ' + (isSent ? 'sent' : 'received');
-        div.textContent = text;
+        
+        const time = new Date(timestamp);
+        const timeStr = time.getHours() + ":" + time.getMinutes().toString().padStart(2, '0');
+
+        div.innerHTML = `${text} <span class="timestamp">${timeStr}</span>`;
         win.appendChild(div);
         win.scrollTop = win.scrollHeight;
     }
 
-    init();
+    function sendMsg() {
+        const input = document.getElementById('msg-input');
+        if (!activeChatId || !input.value.trim()) return;
+
+        const text = input.value;
+        socket.emit('send-message', { toId: activeChatId, text: text });
+        
+        appendMsgUI(text, true, new Date());
+        input.value = "";
+    }
+
+    // Handle incoming real-time messages
+    socket.on('receive-message', (data) => {
+        if (activeChatId == data.fromId) {
+            appendMsgUI(data.text, false, new Date());
+        }
+        loadContacts(); // Refresh counters in sidebar
+    });
+
+    // Handle Enter Key
+    document.getElementById('msg-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') sendMsg();
+    });
+
+    // Initial Load
+    loadContacts();
 </script>
+
 </body>
 </html>
