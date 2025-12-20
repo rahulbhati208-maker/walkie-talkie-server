@@ -10,10 +10,10 @@ const io = new Server(server);
 // --- DATABASE SETUP ---
 // Replace placeholders with your Razorhost Shared IP and DB info
 const pool = mysql.createPool({
-    host: 'sql301.hstn.me', 
-    user: 'mseet_35991600', 
-    password: 'Cm8DU9qPwBna', 
-    database: 'mseet_35991600_chatx',
+    host: '37.27.71.198', 
+    user: 'ngyesawv_user', 
+    password: 'rahulB123@', 
+    database: 'ngyesawv_mock',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
