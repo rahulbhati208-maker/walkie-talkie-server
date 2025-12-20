@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Dashboard - WhatsApp Clone</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #075e54; border-bottom: 2px solid #075e54; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .btn-approve { background: #25d366; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; text-decoration: none; font-size: 14px; }
+        .btn-approve:hover { background: #128c7e; }
+        .no-users { padding: 20px; text-align: center; color: #666; }
+        .nav-links { margin-top: 20px; display: block; color: #075e54; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pending User Approvals</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Phone Number</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="user-table-body">
+                </tbody>
+        </table>
+        <div id="empty-msg" class="no-users" style="display:none;">No pending approvals at the moment.</div>
+        <a href="/chat" class="nav-links">← Back to Chat</a>
+    </div>
+
+    <script>
+        async function loadPendingUsers() {
+            try {
+                const res = await fetch('/api/admin/pending');
+                if (res.status === 403) {
+                    alert("Unauthorized! You are not an admin.");
+                    window.location.href = '/chat';
+                    return;
+                }
+                const users = await res.json();
+                const tbody = document.getElementById('user-table-body');
+                const emptyMsg = document.getElementById('empty-msg');
+
+                if (users.length === 0) {
+                    emptyMsg.style.display = 'block';
+                    return;
+                }
+
+                tbody.innerHTML = users.map(user => `
+                    <tr>
+                        <td>${user.profile_name}</td>
+                        <td>${user.phone}</td>
+                        <td>
+                            <button class="btn-approve" onclick="approveUser(${user.id})">Approve User</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error("Error loading users:", err);
+            }
+        }
+
+        async function approveUser(id) {
+            if (confirm("Allow this user to log in?")) {
+                const res = await fetch(\`/admin/approve/\${id}\`);
+                if (res.ok) {
+                    location.reload();
+                }
+            }
+        }
+
+        loadPendingUsers();
+    </script>
+</body>
+</html>
