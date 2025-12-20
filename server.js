@@ -21,98 +21,105 @@ const dbOptions = {
 const pool = mysql.createPool(dbOptions);
 const sessionStore = new MySQLStore(dbOptions);
 
-// --- MIDDLEWARE ---
-app.use(express.static('public'));
-app.use(express.urlencoded({ extended: true }));
-app.use(session({
+const sessionMiddleware = session({
     key: 'whatsapp_session',
     secret: 'super_secret_key_123',
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // 30 Days
-}));
+    cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 }
+});
 
-// --- ROUTES ---
+app.use(sessionMiddleware);
+app.use(express.static('public'));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
-// Registration
+// --- AUTH ROUTES ---
+
 app.post('/register', async (req, res) => {
     const { phone, password, name } = req.body;
     const hashed = await bcrypt.hash(password, 10);
     try {
         await pool.query('INSERT INTO users (phone, password, profile_name) VALUES (?, ?, ?)', [phone, hashed, name]);
-        res.send("<h2>Registration Successful</h2><p>Wait for Admin approval before logging in.</p><a href='/login'>Go to Login</a>");
-    } catch (e) { res.status(500).send("User already exists or DB Error."); }
+        res.send("Registration Success. Wait for Admin approval. <a href='/login'>Login</a>");
+    } catch (e) { res.status(500).send("User already exists."); }
 });
 
-// Login
 app.post('/login', async (req, res) => {
     const { phone, password } = req.body;
     const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-    
     if (users.length && await bcrypt.compare(password, users[0].password)) {
         if (users[0].is_approved) {
             req.session.userId = users[0].id;
-            req.session.isAdmin = users[0].is_admin;
             req.session.phone = users[0].phone;
+            req.session.name = users[0].profile_name;
             res.redirect('/chat');
-        } else {
-            res.send("<h2>Pending Approval</h2><p>Your account has not been approved by an admin yet.</p>");
-        }
-    } else {
-        res.send("Invalid credentials. <a href='/login'>Try again</a>");
-    }
+        } else { res.send("Account pending approval."); }
+    } else { res.send("Invalid login."); }
 });
 
-// --- ADMIN DASHBOARD LOGIC ---
-app.get('/admin', async (req, res) => {
-    if (!req.session.isAdmin) return res.status(403).send("Unauthorized");
-    
-    const [unapproved] = await pool.query('SELECT id, phone, profile_name FROM users WHERE is_approved = 0');
-    
-    let listHtml = unapproved.map(u => `
-        <li>
-            ${u.profile_name} (${u.phone}) 
-            <a href="/admin/approve/${u.id}">[Approve]</a>
-        </li>`).join('');
+// --- CONTACTS LOGIC ---
 
-    res.send(`
-        <h1>Admin Dashboard - Pending Users</h1>
-        <ul>${listHtml || "No pending users"}</ul>
-        <a href="/chat">Go to Chat</a>
-    `);
+// Search and add a contact by phone number
+app.post('/add-contact', async (req, res) => {
+    if (!req.session.userId) return res.status(401).send("Unauthorized");
+    const { phone } = req.body;
+    try {
+        const [target] = await pool.query('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (!target.length) return res.send("<script>alert('User not found'); window.location='/chat';</script>");
+        
+        await pool.query('INSERT IGNORE INTO contacts (user_id, contact_id) VALUES (?, ?)', [req.session.userId, target[0].id]);
+        res.redirect('/chat');
+    } catch (e) { res.status(500).send("Error adding contact"); }
 });
 
-app.get('/admin/approve/:id', async (req, res) => {
-    if (!req.session.isAdmin) return res.status(403).send("Unauthorized");
-    await pool.query('UPDATE users SET is_approved = 1 WHERE id = ?', [req.params.id]);
-    res.redirect('/admin');
+// Fetch user's persistent contact list
+app.get('/my-contacts', async (req, res) => {
+    if (!req.session.userId) return res.json([]);
+    const [contacts] = await pool.query(`
+        SELECT u.id, u.phone, u.profile_name 
+        FROM users u 
+        JOIN contacts c ON u.id = c.contact_id 
+        WHERE c.user_id = ?`, [req.session.userId]);
+    res.json(contacts);
 });
 
-// Chat Page (Protected)
+// Load old messages for a specific contact
+app.get('/messages/:contactId', async (req, res) => {
+    const myId = req.session.userId;
+    const contactId = req.params.contactId;
+    const [msgs] = await pool.query(`
+        SELECT sender_id, message FROM direct_messages 
+        WHERE (sender_id = ? AND receiver_id = ?) 
+        OR (sender_id = ? AND receiver_id = ?) 
+        ORDER BY created_at ASC`, [myId, contactId, contactId, myId]);
+    res.json(msgs);
+});
+
 app.get('/chat', (req, res) => {
     if (!req.session.userId) return res.redirect('/login');
     res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 // --- SOCKET.IO ---
+io.engine.use(sessionMiddleware);
+
 io.on('connection', (socket) => {
-    socket.on('register-socket', (phone) => {
-        socket.join(phone); // Join a room named after their phone number
-    });
+    const userId = socket.request.session.userId;
+    if (!userId) return socket.disconnect();
+
+    socket.join(`user_${userId}`);
 
     socket.on('send-message', async (data) => {
-        // data = { toPhone, fromPhone, message }
-        await pool.query('INSERT INTO direct_messages (sender_id, receiver_id, message) SELECT (SELECT id FROM users WHERE phone=?), (SELECT id FROM users WHERE phone=?), ?', 
-        [data.fromPhone, data.toPhone, data.message]);
+        const { toId, text } = data;
+        await pool.query('INSERT INTO direct_messages (sender_id, receiver_id, message) VALUES (?, ?, ?)', [userId, toId, text]);
         
-        // Send to the specific recipient
-        io.to(data.toPhone).emit('receive-message', {
-            from: data.fromPhone,
-            text: data.message
+        io.to(`user_${toId}`).emit('receive-message', {
+            fromId: userId,
+            text: text
         });
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('WhatsApp Server running...'));
+server.listen(process.env.PORT || 3000, () => console.log('Server Live'));
