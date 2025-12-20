@@ -1,58 +1,103 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Chat</title>
+    <title>WhatsApp Clone</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: sans-serif; margin: 0; background: #e5ddd5; display: flex; flex-direction: column; height: 100vh; }
-        #header { background: #075e54; color: white; padding: 15px; display: flex; justify-content: space-between; }
-        #chat-window { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
-        .msg { background: white; padding: 10px; border-radius: 8px; width: fit-content; max-width: 80%; }
-        .mine { align-self: flex-end; background: #dcf8c6; }
-        #input-area { background: #f0f0f0; padding: 10px; display: flex; gap: 5px; }
-        input { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ddd; }
+        body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; background: #e5ddd5; }
+        #sidebar { width: 300px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        #search-box { padding: 15px; background: #075e54; color: white; }
+        #contact-list { flex: 1; overflow-y: auto; }
+        .contact-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; }
+        .contact-item:hover { background: #f5f5f5; }
+        
+        #chat-main { flex: 1; display: flex; flex-direction: column; }
+        #chat-header { padding: 15px; background: #eee; font-weight: bold; border-bottom: 1px solid #ccc; }
+        #chat-window { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px; border-radius: 8px; max-width: 70%; word-wrap: break-word; }
+        .sent { align-self: flex-end; background: #dcf8c6; }
+        .received { align-self: flex-start; background: white; }
+        
+        #input-area { padding: 15px; background: #f0f0f0; display: flex; gap: 10px; }
+        input[type="text"] { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; outline: none; }
+        button { padding: 10px 20px; background: #075e54; color: white; border: none; border-radius: 20px; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div id="header">
-        <span>My Chat</span>
-        <input type="text" id="target-phone" placeholder="Chat with (Phone #)..." style="width: 150px; color: black;">
+
+<div id="sidebar">
+    <div id="search-box">
+        <form action="/add-contact" method="POST">
+            <input type="text" name="phone" placeholder="Search phone number..." required style="width: 75%;">
+            <button type="submit">+</button>
+        </form>
     </div>
+    <div id="contact-list"></div>
+</div>
+
+<div id="chat-main">
+    <div id="chat-header">Select a contact</div>
     <div id="chat-window"></div>
     <div id="input-area">
         <input type="text" id="msg-input" placeholder="Type a message...">
         <button onclick="send()">Send</button>
     </div>
+</div>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        // These would ideally come from the session via a small API call, 
-        // but for now, we'll prompt or assume session is handled.
-        const myPhone = prompt("Verify your Phone Number to start receiving messages:");
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+    let activeChatId = null;
+    let myId = null;
+
+    async function init() {
+        const res = await fetch('/my-contacts');
+        const contacts = await res.json();
+        const list = document.getElementById('contact-list');
+        list.innerHTML = contacts.map(c => `
+            <div class="contact-item" onclick="selectChat(${c.id}, '${c.profile_name}')">
+                <strong>${c.profile_name}</strong><br><small>${c.phone}</small>
+            </div>
+        `).join('');
+    }
+
+    async function selectChat(id, name) {
+        activeChatId = id;
+        document.getElementById('chat-header').innerText = name;
+        document.getElementById('chat-window').innerHTML = "Loading...";
         
-        socket.emit('register-socket', myPhone);
+        const res = await fetch('/messages/' + id);
+        const history = await res.json();
+        document.getElementById('chat-window').innerHTML = "";
+        history.forEach(m => appendMsg(m.message, m.sender_id != id));
+    }
 
-        socket.on('receive-message', (data) => {
-            appendMessage(data.from + ": " + data.text, false);
-        });
-
-        function send() {
-            const toPhone = document.getElementById('target-phone').value;
-            const msg = document.getElementById('msg-input').value;
-            if(!toPhone || !msg) return alert("Enter target phone and message");
-
-            socket.emit('send-message', { toPhone, fromPhone: myPhone, message: msg });
-            appendMessage("Me: " + msg, true);
-            document.getElementById('msg-input').value = '';
+    socket.on('receive-message', (data) => {
+        if (activeChatId == data.fromId) {
+            appendMsg(data.text, false);
+        } else {
+            alert("New message from another contact!");
         }
+    });
 
-        function appendMessage(text, isMine) {
-            const div = document.createElement('div');
-            div.className = 'msg ' + (isMine ? 'mine' : '');
-            div.textContent = text;
-            document.getElementById('chat-window').appendChild(div);
-        }
-    </script>
+    function send() {
+        const text = document.getElementById('msg-input').value;
+        if (!activeChatId || !text) return;
+        socket.emit('send-message', { toId: activeChatId, text: text });
+        appendMsg(text, true);
+        document.getElementById('msg-input').value = "";
+    }
+
+    function appendMsg(text, isSent) {
+        const win = document.getElementById('chat-window');
+        const div = document.createElement('div');
+        div.className = 'msg ' + (isSent ? 'sent' : 'received');
+        div.textContent = text;
+        win.appendChild(div);
+        win.scrollTop = win.scrollHeight;
+    }
+
+    init();
+</script>
 </body>
 </html>
