@@ -6,14 +6,19 @@
     <title>Chat X</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root { --wa-teal: #075e54; --my-msg: #dcf8c6; --rec-msg: #fff; }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; } /* Disable default text selection for better app feel */
-        body { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; font-family: sans-serif; background: #000; }
+        :root { --wa-teal: #075e54; --my-msg: #dcf8c6; --rec-msg: #fff; --bg-gray: #f0f2f5; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; font-family: sans-serif; background: #000; }
 
-        .app-shell { width: 100%; height: 100%; display: flex; background: #fff; }
-        #sidebar { width: 30%; min-width: 320px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; transition: transform 0.3s; z-index: 2; }
-        #chat-main { flex: 1; display: flex; flex-direction: column; background: #efe7dd; position: relative; transition: transform 0.3s; }
+        .app-shell { display: flex; width: 100%; height: 100%; background: #fff; }
         
+        /* Sidebar */
+        #sidebar { width: 30%; min-width: 320px; height: 100%; border-right: 1px solid #ddd; display: flex; flex-direction: column; background: #fff; z-index: 10; transition: transform 0.3s; }
+        
+        /* Chat Main */
+        #chat-main { flex: 1; height: 100%; display: flex; flex-direction: column; background: #efe7dd; position: relative; transition: transform 0.3s; }
+        
+        /* Mobile Toggle */
         @media (max-width: 768px) {
             #sidebar { width: 100%; position: absolute; }
             #chat-main { width: 100%; position: absolute; left: 100%; }
@@ -21,246 +26,219 @@
             .view-chat #chat-main { transform: translateX(-100%); }
         }
 
-        .header { height: 60px; background: var(--wa-teal); color: white; display: flex; align-items: center; padding: 0 15px; }
-        #chat-window { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; }
+        .header { height: 60px; background: var(--wa-teal); color: white; display: flex; align-items: center; padding: 0 15px; justify-content: space-between; }
         
-        /* MSG STYLES */
-        .msg { position: relative; padding: 8px 12px; border-radius: 8px; max-width: 75%; margin-bottom: 5px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); transition: transform 0.2s; }
+        /* Connection Dot */
+        .conn-dot { width: 10px; height: 10px; border-radius: 50%; background: red; border: 1px solid white; transition: background 0.3s; margin-left: 10px; }
+        .conn-online { background: #0f0; box-shadow: 0 0 5px #0f0; }
+
+        /* Contact List */
+        .contact-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .contact-item:hover { background: var(--bg-gray); }
+
+        /* Chat Area */
+        #chat-window { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; }
+        .msg { padding: 8px 12px; border-radius: 8px; max-width: 75%; margin-bottom: 6px; font-size: 15px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); word-wrap: break-word; position: relative; }
         .sent { align-self: flex-end; background: var(--my-msg); border-top-right-radius: 0; }
         .received { align-self: flex-start; background: var(--rec-msg); border-top-left-radius: 0; }
-        .reply-preview { background: rgba(0,0,0,0.05); border-left: 4px solid var(--wa-teal); padding: 4px; font-size: 12px; margin-bottom: 4px; border-radius: 4px; }
-        .footer { font-size: 10px; color: #888; display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 4px; }
+        .meta { font-size: 10px; color: #888; display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px; }
         
-        /* CONTEXT MENU */
-        #ctx-menu { display: none; position: fixed; bottom: 0; left: 0; width: 100%; background: white; border-top-left-radius: 15px; border-top-right-radius: 15px; z-index: 100; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); padding: 20px; }
-        .ctx-item { padding: 15px; border-bottom: 1px solid #eee; font-size: 16px; display: flex; gap: 10px; cursor: pointer; }
-        .ctx-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 99; }
-
-        /* FORWARD MODAL */
-        #fwd-modal { display: none; position: fixed; top: 10%; left: 50%; transform: translateX(-50%); width: 90%; max-width: 400px; background: white; border-radius: 10px; padding: 20px; z-index: 101; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
-        .fwd-list { max-height: 300px; overflow-y: auto; margin-top: 10px; }
-        .fwd-user { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
-        .fwd-user:hover { background: #f5f5f5; }
-
-        /* FILTER BOX */
-        #date-box { display: none; position: absolute; top: 60px; right: 10px; background: white; padding: 15px; z-index: 50; box-shadow: 0 4px 10px rgba(0,0,0,0.2); border-radius: 8px; }
-
-        #input-area { background: #f0f0f0; padding: 10px; display: flex; gap: 10px; }
-        input { flex: 1; padding: 10px; border-radius: 20px; border: none; outline: none; }
+        #input-area { background: var(--bg-gray); padding: 10px; display: flex; gap: 10px; align-items: center; }
+        input { flex: 1; padding: 12px; border-radius: 20px; border: none; outline: none; }
+        
+        .typing { font-size: 12px; color: #fff; font-style: italic; opacity: 0.8; }
     </style>
 </head>
 <body>
 
 <div class="app-shell">
     <div id="sidebar">
-        <div class="header"><strong>Chat X</strong></div>
-        <div id="contact-list" style="overflow-y:auto; flex:1;"></div>
-    </div>
-    <div id="chat-main">
         <div class="header">
-            <span onclick="closeChat()" style="margin-right:15px; font-size:24px; cursor:pointer;">←</span>
-            <div style="flex:1"><strong id="chat-name">Select Chat</strong></div>
-            <button onclick="toggleFilter()" style="background:none; border:none; color:white; font-size:20px;">📅</button>
-            <div id="date-box">
-                <input type="date" id="d-from"><br><br><input type="date" id="d-to"><br><br>
-                <button onclick="applyFilter()">Filter</button>
+            <div style="display:flex; align-items:center;">
+                <strong>Chat X</strong>
+                <div id="status-dot-side" class="conn-dot" title="Connection Status"></div>
             </div>
         </div>
+        <div id="contact-list" style="overflow-y:auto; flex:1;"></div>
+    </div>
+
+    <div id="chat-main">
+        <div class="header">
+            <div style="display:flex; align-items:center;">
+                <span onclick="closeChat()" style="margin-right:15px; font-size:24px; cursor:pointer;">←</span>
+                <div>
+                    <strong id="chat-title">Select Chat</strong>
+                    <div id="typing-ui" class="typing" style="display:none;">typing...</div>
+                    <div id="last-seen-ui" style="font-size:10px; opacity:0.8;"></div>
+                </div>
+            </div>
+            <div id="status-dot-main" class="conn-dot"></div>
+        </div>
+        
         <div id="chat-window"></div>
         
-        <div id="reply-bar" style="display:none; background:#eee; padding:10px; border-left:5px solid var(--wa-teal);">
-            <span id="reply-txt" style="font-size:12px;"></span>
-            <span onclick="cancelReply()" style="float:right; cursor:pointer;">×</span>
-        </div>
-
         <div id="input-area">
-            <input type="text" id="msg-in" placeholder="Type a message...">
-            <button onclick="send()" style="border:none; background:var(--wa-teal); color:white; width:40px; height:40px; border-radius:50%;">➤</button>
+            <input type="text" id="msg-in" placeholder="Type a message..." oninput="handleTyping()">
+            <button onclick="send()" style="border:none; background:var(--wa-teal); color:white; width:40px; height:40px; border-radius:50%; cursor:pointer;">➤</button>
         </div>
     </div>
-</div>
-
-<div class="ctx-overlay" id="overlay" onclick="closeMenu()"></div>
-<div id="ctx-menu">
-    <div class="ctx-item" onclick="menuAction('reply')">↩ Reply</div>
-    <div class="ctx-item" onclick="menuAction('copy')">📋 Copy</div>
-    <div class="ctx-item" onclick="menuAction('forward')">⏩ Forward</div>
-    <div class="ctx-item" onclick="menuAction('star')">⭐ Star / Unstar</div>
-    <div class="ctx-item" style="color:red; text-align:center; display:block;" onclick="closeMenu()">Cancel</div>
-</div>
-
-<div id="fwd-modal">
-    <h3>Forward to...</h3>
-    <div class="fwd-list" id="fwd-list"></div>
-    <button onclick="document.getElementById('fwd-modal').style.display='none'; document.getElementById('overlay').style.display='none';" style="margin-top:10px;">Close</button>
 </div>
 
 <script>
     const socket = io();
+    let myId = null;
     let activeChatId = null;
-    let selectedMsg = null; // { id, text, isStarred }
-    let replyId = null;
-    let contactCache = [];
+    let typingTimer;
 
-    // --- 1. SWIPE & LONG PRESS LOGIC ---
-    function attachMsgEvents(div, msg) {
-        let startX = 0;
-        let pressTimer;
+    // --- 1. LOCAL STORAGE MANAGER ---
+    const Store = {
+        saveMsgs: (chatId, msgs) => {
+            // Deduplicate based on ID
+            const existing = Store.getMsgs(chatId);
+            const map = new Map();
+            existing.forEach(m => map.set(m.id, m)); // Load old
+            msgs.forEach(m => map.set(m.id, m));     // Merge new
+            const merged = Array.from(map.values()).sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+            localStorage.setItem(`chat_msgs_${chatId}`, JSON.stringify(merged));
+            return merged;
+        },
+        appendMsg: (chatId, msg) => {
+            const msgs = Store.getMsgs(chatId);
+            // check if exists
+            if (!msgs.find(m => m.id === msg.id)) {
+                msgs.push(msg);
+                localStorage.setItem(`chat_msgs_${chatId}`, JSON.stringify(msgs));
+            }
+        },
+        getMsgs: (chatId) => {
+            return JSON.parse(localStorage.getItem(`chat_msgs_${chatId}`) || '[]');
+        },
+        saveContacts: (contacts) => localStorage.setItem('chat_contacts', JSON.stringify(contacts)),
+        getContacts: () => JSON.parse(localStorage.getItem('chat_contacts') || '[]')
+    };
 
-        // Long Press
-        div.addEventListener('touchstart', () => {
-            pressTimer = setTimeout(() => openMenu(msg), 600);
-        });
-        div.addEventListener('touchend', () => clearTimeout(pressTimer));
-        div.addEventListener('touchmove', () => clearTimeout(pressTimer)); // Cancel if scrolling
+    // --- 2. CONNECTION STATUS ---
+    socket.on('connect', () => updateStatus(true));
+    socket.on('disconnect', () => updateStatus(false));
 
-        // Swipe (Mobile only)
-        div.addEventListener('touchstart', e => startX = e.touches[0].clientX);
-        div.addEventListener('touchmove', e => {
-            const diff = e.touches[0].clientX - startX;
-            if (diff > 50) div.style.transform = `translateX(${Math.min(diff, 80)}px)`;
-        });
-        div.addEventListener('touchend', e => {
-            const diff = e.changedTouches[0].clientX - startX;
-            if (diff > 60) triggerReply(msg.id, msg.message);
-            div.style.transform = 'translateX(0)';
-        });
+    function updateStatus(online) {
+        const cls = online ? 'conn-dot conn-online' : 'conn-dot';
+        document.getElementById('status-dot-side').className = cls;
+        document.getElementById('status-dot-main').className = cls;
     }
 
-    // --- 2. MENU ACTIONS ---
-    function openMenu(msg) {
-        selectedMsg = msg;
-        document.getElementById('ctx-menu').style.display = 'block';
-        document.getElementById('overlay').style.display = 'block';
-        if(navigator.vibrate) navigator.vibrate(50);
-    }
+    // --- 3. INIT LOGIC ---
+    async function init() {
+        // 1. Get My ID
+        const meRes = await fetch('/api/me');
+        if (meRes.status === 401) return window.location.href = '/login';
+        const meData = await meRes.json();
+        myId = meData.myId;
 
-    function closeMenu() {
-        document.getElementById('ctx-menu').style.display = 'none';
-        document.getElementById('overlay').style.display = 'none';
-        document.getElementById('fwd-modal').style.display = 'none';
-    }
+        // 2. Load Contacts from LocalStorage (Fast)
+        renderContacts(Store.getContacts());
 
-    async function menuAction(action) {
-        closeMenu();
-        if (!selectedMsg) return;
-
-        if (action === 'reply') triggerReply(selectedMsg.id, selectedMsg.message);
-        
-        if (action === 'copy') {
-            navigator.clipboard.writeText(selectedMsg.message);
-            alert("Copied!");
-        }
-
-        if (action === 'star') {
-            const newStatus = selectedMsg.is_starred ? 0 : 1;
-            await fetch('/api/star-message', {
-                method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ msgId: selectedMsg.id, isStarred: newStatus })
-            });
-            loadChat(activeChatId, document.getElementById('chat-name').innerText); // Refresh
-        }
-
-        if (action === 'forward') {
-            document.getElementById('overlay').style.display = 'block';
-            document.getElementById('fwd-modal').style.display = 'block';
-            const list = document.getElementById('fwd-list');
-            list.innerHTML = contactCache.map(c => `
-                <div class="fwd-user" onclick="forwardTo(${c.id})">
-                    <strong>${c.profile_name}</strong>
-                </div>
-            `).join('');
-        }
-    }
-
-    function forwardTo(targetId) {
-        socket.emit('send-message', { toId: targetId, text: selectedMsg.message });
-        alert("Message forwarded!");
-        closeMenu();
-    }
-
-    // --- 3. FILTER FIX ---
-    function toggleFilter() {
-        const d = document.getElementById('date-box');
-        d.style.display = d.style.display === 'block' ? 'none' : 'block';
-    }
-
-    async function applyFilter() {
-        const from = document.getElementById('d-from').value;
-        const to = document.getElementById('d-to').value;
-        if(!from || !to) return alert("Select both dates");
-        
-        const res = await fetch(`/messages/${activeChatId}?from=${from}&to=${to}`);
-        const data = await res.json();
-        renderMsgs(data.messages);
-        toggleFilter();
-    }
-
-    // --- 4. CORE CHAT LOGIC ---
-    async function loadContacts() {
+        // 3. Fetch Fresh Contacts from Server (Background)
         const res = await fetch('/my-contacts');
-        contactCache = await res.json();
-        document.getElementById('contact-list').innerHTML = contactCache.map(c => `
-            <div onclick="loadChat(${c.id}, '${c.profile_name}')" style="padding:15px; border-bottom:1px solid #eee;">
-                <b>${c.profile_name}</b> 
-                ${c.unread_count > 0 ? `<span style="float:right; background:#25d366; color:white; border-radius:50%; padding:2px 6px;">${c.unread_count}</span>`:''}
-            </div>
-        `).join('');
+        const contacts = await res.json();
+        Store.saveContacts(contacts);
+        renderContacts(contacts);
     }
 
-    async function loadChat(id, name) {
+    function renderContacts(contacts) {
+        const list = document.getElementById('contact-list');
+        list.innerHTML = contacts.map(c => {
+            const name = (c.id === myId) ? `${c.profile_name} (You)` : c.profile_name;
+            return `
+            <div class="contact-item" onclick="openChat(${c.id}, '${name}', '${c.last_seen}')">
+                <div>
+                    <b>${name}</b><br>
+                    <small style="color:#888">${c.last_seen ? new Date(c.last_seen).toLocaleDateString() : ''}</small>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    // --- 4. CHAT LOGIC ---
+    async function openChat(id, name, lastSeen) {
         activeChatId = id;
-        document.getElementById('chat-name').innerText = name;
+        document.getElementById('chat-title').innerText = name;
+        document.getElementById('last-seen-ui').innerText = id === myId ? '' : (lastSeen ? "Last seen: " + new Date(lastSeen).toLocaleTimeString() : 'Online');
         if(window.innerWidth < 768) document.body.classList.add('view-chat');
-        
+
+        // A. Load from LocalStorage (Instant)
+        renderMsgs(Store.getMsgs(id));
+
+        // B. Fetch Missed Messages from Server
         const res = await fetch(`/messages/${id}`);
-        const data = await res.json();
-        renderMsgs(data.messages);
+        const serverMsgs = await res.json();
+        
+        // C. Merge & Save
+        const merged = Store.saveMsgs(id, serverMsgs);
+        renderMsgs(merged);
     }
 
     function renderMsgs(msgs) {
         const win = document.getElementById('chat-window');
-        win.innerHTML = '';
+        win.innerHTML = ''; // Clear current view
         msgs.forEach(m => {
             const div = document.createElement('div');
-            div.className = 'msg ' + (m.sender_id == activeChatId ? 'received' : 'sent');
-            
-            const starHtml = m.is_starred ? '<span style="color:#f1c40f; margin-right:3px;">★</span>' : '';
-            const replyHtml = m.reply_text ? `<div class="reply-preview">${m.reply_text}</div>` : '';
-            
-            div.innerHTML = `${replyHtml}${m.message} 
-                <div class="footer">${starHtml} ${new Date(m.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>`;
-            
-            attachMsgEvents(div, m); // Attach swipe/long-press
+            div.className = 'msg ' + (m.sender_id == myId ? 'sent' : 'received');
+            const time = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            div.innerHTML = `${m.message}<div class="meta">${time}</div>`;
             win.appendChild(div);
         });
         win.scrollTop = win.scrollHeight;
     }
 
-    function triggerReply(id, text) {
-        replyId = id;
-        document.getElementById('reply-bar').style.display = 'block';
-        document.getElementById('reply-txt').innerText = "Replying to: " + text;
-    }
-    
-    function cancelReply() {
-        replyId = null;
-        document.getElementById('reply-bar').style.display = 'none';
-    }
-
+    // --- 5. SEND / RECEIVE ---
     function send() {
         const txt = document.getElementById('msg-in').value;
         if(!txt || !activeChatId) return;
-        socket.emit('send-message', { toId: activeChatId, text: txt, replyTo: replyId }, () => {
-            loadChat(activeChatId, document.getElementById('chat-name').innerText);
-            cancelReply();
+
+        socket.emit('send-message', { toId: activeChatId, text: txt }, (ack) => {
+            if(ack.success) {
+                // Add to LocalStorage & View immediately
+                Store.appendMsg(activeChatId, ack.msg);
+                renderMsgs(Store.getMsgs(activeChatId));
+            }
         });
         document.getElementById('msg-in').value = '';
     }
 
+    socket.on('receive-message', (msg) => {
+        // Decide which chat this belongs to
+        // If I sent it (from another tab/device), it belongs to msg.receiver_id
+        // If I received it, it belongs to msg.sender_id
+        const chatId = (msg.sender_id === myId) ? msg.receiver_id : msg.sender_id; // logic handles self-chat too
+        
+        Store.appendMsg(chatId, msg);
+
+        if(activeChatId === chatId || (activeChatId === myId && chatId === myId)) {
+            renderMsgs(Store.getMsgs(activeChatId));
+        }
+    });
+    
+    // Also handle confirm for self-sent messages
+    socket.on('msg-sent-confirm', (msg) => {
+         Store.appendMsg(msg.receiver_id, msg);
+         if(activeChatId === msg.receiver_id) renderMsgs(Store.getMsgs(activeChatId));
+    });
+
+    // --- 6. TYPING ---
+    function handleTyping() {
+        if(!activeChatId) return;
+        socket.emit('typing', { toId: activeChatId });
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => socket.emit('stop-typing', { toId: activeChatId }), 3000);
+    }
+
+    socket.on('is-typing', d => { if(d.fromId == activeChatId) document.getElementById('typing-ui').style.display = 'block'; });
+    socket.on('not-typing', d => { if(d.fromId == activeChatId) document.getElementById('typing-ui').style.display = 'none'; });
+
     function closeChat() { document.body.classList.remove('view-chat'); }
-    socket.on('receive-message', d => { if(d.fromId == activeChatId) loadChat(activeChatId, document.getElementById('chat-name').innerText); loadContacts(); });
-    loadContacts();
+    
+    init();
 </script>
 </body>
 </html>
