@@ -11,7 +11,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// --- DATABASE CONFIG ---
+// --- 1. ROBUST DATABASE CONFIG ---
 const dbOptions = { 
     host: '37.27.71.198', 
     user: 'ngyesawv_user', 
@@ -25,36 +25,43 @@ const dbOptions = {
 const pool = mysql.createPool(dbOptions);
 const sessionStore = new MySQLStore(dbOptions);
 
+// --- 2. LONG-LIVED SESSIONS (1 YEAR) ---
 const sessionMiddleware = session({
     key: 'chatx_session',
     secret: 'chatx_secret_key_99',
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 24 * 30, httpOnly: true }
+    cookie: { 
+        maxAge: 1000 * 60 * 60 * 24 * 365, // 1 Year
+        httpOnly: true 
+    }
 });
 
-// Middleware
 app.use(sessionMiddleware);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static('public'));
 
-// Update Last Seen
-app.use(async (req, res, next) => {
-    if (req.session.userId) {
-        try {
-            await pool.query('UPDATE users SET last_seen = NOW() WHERE id = ?', [req.session.userId]);
-        } catch (e) { console.error("LastSeen Error:", e.message); }
+// --- 3. AUTHENTICATION MIDDLEWARE ---
+// Forces login if session is missing
+const requireAuth = (req, res, next) => {
+    if (!req.session.userId) {
+        // If it's an API call, send 401 so frontend can handle it
+        if (req.path.startsWith('/api') || req.xhr) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+        // If it's a page load, redirect
+        return res.redirect('/login');
     }
     next();
-});
+};
 
 // --- ROUTES ---
-app.get('/', (req, res) => res.redirect(req.session.userId ? '/chat' : '/login'));
+
+// Public Routes
 app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
 app.get('/register', (req, res) => res.sendFile(path.join(__dirname, 'public', 'register.html')));
-app.get('/chat', (req, res) => req.session.userId ? res.sendFile(path.join(__dirname, 'public', 'index.html')) : res.redirect('/login'));
 
 app.post('/login', async (req, res) => {
     const { phone, password } = req.body;
@@ -63,75 +70,90 @@ app.post('/login', async (req, res) => {
         if (users.length && await bcrypt.compare(password, users[0].password)) {
             if (users[0].is_approved) {
                 req.session.userId = users[0].id;
-                req.session.isAdmin = users[0].is_admin;
-                req.session.save(() => res.redirect('/chat')); // Forced save before redirect
+                req.session.save(() => res.redirect('/chat')); // Save before redirect
             } else res.send("Account pending approval.");
         } else res.send("Invalid credentials.");
-    } catch (e) { res.status(500).send("Login DB Error"); }
+    } catch (e) { res.status(500).send("DB Error"); }
 });
 
-app.get('/my-contacts', async (req, res) => {
-    const myId = req.session.userId;
-    if (!myId) return res.status(401).json([]);
+// Protected Routes (Apply Middleware)
+app.get('/', requireAuth, (req, res) => res.redirect('/chat'));
+app.get('/chat', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+// --- API ROUTES ---
+
+app.get('/my-contacts', requireAuth, async (req, res) => {
     try {
+        // Update Last Seen
+        await pool.query('UPDATE users SET last_seen = NOW() WHERE id = ?', [req.session.userId]);
+        
         const [contacts] = await pool.query(`
             SELECT u.id, u.profile_name, u.last_seen, c.last_chat_time,
             (SELECT COUNT(*) FROM direct_messages WHERE sender_id = u.id AND receiver_id = ? AND status != 'read') as unread_count
             FROM users u 
             JOIN contacts c ON u.id = c.contact_id 
             WHERE c.user_id = ? 
-            ORDER BY c.last_chat_time DESC`, [myId, myId]);
+            ORDER BY c.last_chat_time DESC`, [req.session.userId, req.session.userId]);
         res.json(contacts);
-    } catch (e) { console.error(e); res.json([]); }
+    } catch (e) { res.status(500).json([]); }
 });
 
-app.get('/messages/:contactId', async (req, res) => {
+// --- 4. MESSAGES API WITH DATE FILTER ---
+app.get('/messages/:contactId', requireAuth, async (req, res) => {
     const myId = req.session.userId;
     const contactId = req.params.contactId;
-    if (!myId) return res.status(401).json({messages: []});
+    const { from, to } = req.query; // Get dates from URL
 
     try {
+        // Mark as read
         await pool.query("UPDATE direct_messages SET status = 'read' WHERE sender_id = ? AND receiver_id = ?", [contactId, myId]);
-        const [msgs] = await pool.query(`
+
+        let query = `
             SELECT m.id, m.sender_id, m.message, m.created_at, m.status, r.message as reply_text 
             FROM direct_messages m 
             LEFT JOIN direct_messages r ON m.reply_to_id = r.id
-            WHERE (m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?) 
-            ORDER BY m.created_at ASC`, [myId, contactId, contactId, myId]);
+            WHERE ((m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?))
+        `;
         
+        const params = [myId, contactId, contactId, myId];
+
+        // Apply Date Filter if provided
+        if (from && to) {
+            query += ` AND m.created_at BETWEEN ? AND ?`;
+            params.push(`${from} 00:00:00`, `${to} 23:59:59`);
+        }
+
+        query += ` ORDER BY m.created_at ASC`;
+
+        const [msgs] = await pool.query(query, params);
         const [user] = await pool.query('SELECT profile_name, last_seen FROM users WHERE id = ?', [contactId]);
+        
         res.json({ messages: msgs, contact: user[0] });
-    } catch (e) { res.json({messages: []}); }
+    } catch (e) { res.status(500).json({ messages: [] }); }
 });
 
-// --- SOCKET.IO BRIDGE ---
+// --- SOCKET.IO ---
 io.engine.use(sessionMiddleware);
 
 io.on('connection', (socket) => {
     const session = socket.request.session;
-    if (!session || !session.userId) {
-        console.log("Socket rejected: No Session");
-        return socket.disconnect();
-    }
+    if (!session || !session.userId) return socket.disconnect(); // Reject unauth sockets
+
     const userId = session.userId;
     socket.join(`user_${userId}`);
 
     socket.on('send-message', async (data, callback) => {
         try {
-            const [result] = await pool.query('INSERT INTO direct_messages (sender_id, receiver_id, message, status, reply_to_id) VALUES (?, ?, ?, "sent", ?)', 
+            await pool.query('INSERT INTO direct_messages (sender_id, receiver_id, message, status, reply_to_id) VALUES (?, ?, ?, "sent", ?)', 
                 [userId, data.toId, data.text, data.replyTo || null]);
             
             await pool.query('UPDATE contacts SET last_chat_time = NOW() WHERE (user_id = ? AND contact_id = ?) OR (user_id = ? AND contact_id = ?)', 
                 [userId, data.toId, data.toId, userId]);
             
             io.to(`user_${data.toId}`).emit('receive-message', { fromId: userId, text: data.text });
-            if(callback) callback({ success: true, id: result.insertId });
+            if(callback) callback({ success: true });
         } catch (e) { if(callback) callback({ success: false }); }
     });
-
-    socket.on('typing', (d) => io.to(`user_${d.toId}`).emit('is-typing', { fromId: userId }));
-    socket.on('stop-typing', (d) => io.to(`user_${d.toId}`).emit('not-typing', { fromId: userId }));
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Chat X live on port ${PORT}`));
+server.listen(process.env.PORT || 3000, () => console.log("Server Running"));
